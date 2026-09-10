@@ -27,23 +27,33 @@ tenant choices:
 
 ```bash
 export KEYCLOAK_AUDIENCE=digit-ui
+export KEYCLOAK_BFF_CLIENT_SECRET='<same-secret-configured-on-the-bff-client>'
 export KEYCLOAK_ORG_TENANT_MAPPINGS='[
   {"organizationId":"<bomet-org-uuid>","tenantId":"ke.bomet","name":"Bomet County"},
   {"organizationId":"<kisumu-org-uuid>","tenantId":"ke.kisumu","name":"Kisumu County"}
 ]'
 ```
 
-The transitional demo API accepts the Keycloak access token directly:
+Start sign-in through the BFF:
 
 ```http
-GET /identity/v1/tenants
-Authorization: Bearer <keycloak-access-token>
+GET /identity/v1/authorize
 ```
 
-It returns only mapped Organizations present in the verified token, with roles
-from each Organization's groups kept separate. The target BFF flow will replace
-the bearer header with an opaque `HttpOnly` session cookie and additionally
-intersect these choices with persisted active DIGIT memberships.
+Keycloak returns to `/identity/v1/callback`. The BFF exchanges and verifies the
+authorization code, stores all Keycloak tokens in Redis, and gives the browser
+only an opaque `HttpOnly` cookie. The browser can then call:
+
+```text
+GET  /identity/v1/session
+GET  /identity/v1/tenants
+POST /identity/v1/logout
+```
+
+The tenant endpoint returns only mapped Organizations present in the verified
+server-side session, with roles from each Organization's groups kept separate.
+Persisted active DIGIT membership remains an additional filter for the next
+backend slice.
 
 ### Run Tests (requires Redis)
 

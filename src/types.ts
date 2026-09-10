@@ -29,6 +29,21 @@ export interface OrganizationTenantMapping {
   name: string;
 }
 
+export interface IdentityTokenSet {
+  accessToken: string;
+  refreshToken?: string;
+  accessExpiresIn: number;
+  refreshExpiresIn?: number;
+}
+
+export interface IdentitySession {
+  claims: KCClaims;
+  accessToken: string;
+  refreshToken?: string;
+  accessExpiresAt: number;
+  refreshExpiresAt?: number;
+}
+
 export interface DigitUser {
   uuid: string;
   userName: string;

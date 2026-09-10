@@ -1,5 +1,8 @@
 import type { OrganizationTenantMapping } from "./types.js";
 
+const keycloakBffClientId =
+  process.env.KEYCLOAK_BFF_CLIENT_ID || "digit-identity-bff";
+
 export function parseOrganizationTenantMappings(
   raw: string,
 ): OrganizationTenantMapping[] {
@@ -48,8 +51,33 @@ export const config = {
   keycloakIssuer: process.env.KEYCLOAK_ISSUER || "http://localhost:8180/auth/realms/digit-sandbox",
   keycloakJwksUri: process.env.KEYCLOAK_JWKS_URI || "http://localhost:8180/auth/realms/digit-sandbox/protocol/openid-connect/certs",
   keycloakAudience: process.env.KEYCLOAK_AUDIENCE || "digit-ui",
+  keycloakBffClientId,
+  keycloakBffClientSecret:
+    process.env.KEYCLOAK_BFF_CLIENT_SECRET || "dev-only-change-me",
+  keycloakBffAudience:
+    process.env.KEYCLOAK_BFF_AUDIENCE || keycloakBffClientId,
   organizationTenantMappings: parseOrganizationTenantMappings(
     process.env.KEYCLOAK_ORG_TENANT_MAPPINGS || "",
+  ),
+
+  // Identity BFF
+  identityRedirectUri:
+    process.env.IDENTITY_REDIRECT_URI ||
+    "http://localhost:18200/identity/v1/callback",
+  identityPostLoginRedirect:
+    process.env.IDENTITY_POST_LOGIN_REDIRECT || "/",
+  identityAllowedOrigin:
+    process.env.IDENTITY_ALLOWED_ORIGIN || "http://localhost:3000",
+  identityScope:
+    process.env.IDENTITY_SCOPE || "openid profile email organization:*",
+  identityCookieName:
+    process.env.IDENTITY_COOKIE_NAME || "digit_identity_session",
+  identityCookieSecure: process.env.IDENTITY_COOKIE_SECURE !== "false",
+  identityLoginTtlSeconds: parseInt(
+    process.env.IDENTITY_LOGIN_TTL_SECONDS || "300",
+  ),
+  identitySessionTtlSeconds: parseInt(
+    process.env.IDENTITY_SESSION_TTL_SECONDS || "604800",
   ),
 
   // Keycloak Admin

@@ -79,8 +79,15 @@ Key environment variables:
 |----------|-------|---------|
 | `KEYCLOAK_ISSUER` | `https://api.egov.theflywheel.in/auth/realms/digit-sandbox` | Default realm issuer (fallback for single-realm mode) |
 | `KEYCLOAK_JWKS_URI` | `http://keycloak:8180/auth/realms/...` | Internal URL for fetching signing keys |
-| `KEYCLOAK_AUDIENCE` | `digit-ui` | Required audience for identity APIs |
+| `KEYCLOAK_AUDIENCE` | `digit-ui` | Expected audience for legacy direct Keycloak-token validation |
+| `KEYCLOAK_BFF_CLIENT_ID` | `digit-identity-bff` | Confidential Authorization Code client used by the identity BFF |
+| `KEYCLOAK_BFF_CLIENT_SECRET` | `dev-only-change-me` | BFF client secret; must be overridden outside local development |
+| `KEYCLOAK_BFF_AUDIENCE` | BFF client ID | Required audience for BFF access tokens |
 | `KEYCLOAK_ORG_TENANT_MAPPINGS` | `[]` | JSON array mapping immutable Keycloak Organization IDs to DIGIT tenants and display names |
+| `IDENTITY_REDIRECT_URI` | `http://localhost:18200/identity/v1/callback` | Exact Keycloak callback URI |
+| `IDENTITY_POST_LOGIN_REDIRECT` | `/` | Fixed browser destination after successful callback |
+| `IDENTITY_ALLOWED_ORIGIN` | `http://localhost:3000` | Browser origin allowed to send the identity cookie |
+| `IDENTITY_COOKIE_SECURE` | `true` | Set `false` only for local HTTP development |
 | `DIGIT_USER_HOST` | `http://egov-user:8107` | DIGIT user service |
 | `DIGIT_SYSTEM_USERNAME` | `ADMIN` | System account for forwarding requests |
 | `REDIS_HOST` | `redis` | Cache for resolved users |
@@ -271,9 +278,12 @@ claim with `KEYCLOAK_ORG_TENANT_MAPPINGS`. Mapping entries use this shape:
 ]
 ```
 
-This bearer-token endpoint is a migration/demo API. The completed BFF will hold
-Keycloak tokens server-side, authenticate this route with an opaque cookie, and
-filter again by persisted active DIGIT membership before returning choices.
+The BFF handles `/authorize`, `/callback`, `/session`, `/tenants`, and `/logout`.
+Keycloak access, refresh, and ID tokens remain in Redis; the browser receives
+only an opaque `HttpOnly`, `SameSite=Lax` session cookie. Access tokens refresh
+server-side when needed, and logout deletes the Redis session and revokes the
+Keycloak refresh token. Persisted active DIGIT membership still needs to be
+added as a further tenant-options filter before production cutover.
 
 ### Groups (City Tenants)
 

@@ -72,5 +72,51 @@ export function createJwksApp() {
       res.json({ keys: [publicJwk] });
     },
   );
+  app.post(
+    "/realms/digit-sandbox/protocol/openid-connect/token",
+    express.urlencoded({ extended: false }),
+    async (req, res) => {
+      const grantType = req.body.grant_type;
+      const validClient =
+        req.body.client_id === "digit-identity-bff" &&
+        req.body.client_secret === "test-bff-secret";
+      const validGrant = grantType === "authorization_code"
+        ? req.body.code === "valid-code" && Boolean(req.body.code_verifier)
+        : grantType === "refresh_token" && req.body.refresh_token === "refresh-1";
+      if (!validClient || !validGrant) {
+        return res.status(400).json({ error: "invalid_grant" });
+      }
+
+      const accessToken = await signJwt({
+        sub: "identity-user-1",
+        email: "person@example.com",
+        name: "Demo Person",
+        aud: "digit-identity-bff",
+        organization: {
+          bomet: {
+            id: "org-bomet-id",
+            realm_access: { roles: ["TENANT_ADMIN"] },
+          },
+          kisumu: {
+            id: "org-kisumu-id",
+            realm_access: { roles: ["VIEWER"] },
+          },
+        },
+      });
+      return res.json({
+        access_token: accessToken,
+        refresh_token: "refresh-1",
+        id_token: "server-side-id-token",
+        expires_in: grantType === "authorization_code" ? 1 : 300,
+        refresh_expires_in: 3600,
+        token_type: "Bearer",
+      });
+    },
+  );
+  app.post(
+    "/realms/digit-sandbox/protocol/openid-connect/logout",
+    express.urlencoded({ extended: false }),
+    (_req, res) => res.status(204).end(),
+  );
   return app;
 }

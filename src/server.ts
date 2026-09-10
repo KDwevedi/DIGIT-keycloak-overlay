@@ -14,7 +14,7 @@ import { searchKeycloakUser, createKeycloakUser, getAdminToken, deriveKcPassword
 import { initKcAdmin, stopKcAdminRefresh, syncTenantRealms } from "./kc-admin.js";
 import { searchUserByUserName, getSystemToken } from "./digit-client.js";
 import { registerPlatformAdminRoutes } from "./platform-admin.js";
-import { tenantOptionsFromClaims } from "./tenant-options.js";
+import { registerIdentityRoutes } from "./identity-routes.js";
 
 // Decode JWT payload without verification (for extracting sub from KC access tokens)
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -171,12 +171,21 @@ export async function createApp() {
 
   // CORS for browser requests
   app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = _req.headers.origin;
+    if (_req.path.startsWith("/identity/v1") && origin === config.identityAllowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Vary", "Origin");
+    } else if (!_req.path.startsWith("/identity/v1")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (_req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
+
+  registerIdentityRoutes(app);
 
   // Register endpoint: create user in Keycloak
   app.post("/register", async (req, res) => {
@@ -253,26 +262,6 @@ export async function createApp() {
       console.error("Userinfo error:", err);
       res.status(500).json({ error: "Failed to resolve user" });
     }
-  });
-
-  // Return only tenant choices proven by this realm's signed Organization
-  // claim and the server-owned Organization ID -> DIGIT tenant mapping.
-  // The browser cannot add a tenant or role by submitting its own values.
-  app.get("/identity/v1/tenants", async (req, res) => {
-    const claims = await validateJwt(req.headers.authorization, {
-      issuer: config.keycloakIssuer,
-      audience: config.keycloakAudience,
-    }).catch(() => null);
-
-    if (!claims) {
-      return res.status(401).json({ error: "Invalid or missing Keycloak token" });
-    }
-
-    const tenants = tenantOptionsFromClaims(
-      claims,
-      config.organizationTenantMappings,
-    );
-    return res.json({ tenants, selectionRequired: tenants.length > 1 });
   });
 
   // Keycloak token endpoint with lazy DIGIT→KC user provisioning.

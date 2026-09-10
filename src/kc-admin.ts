@@ -75,6 +75,13 @@ export async function createRealm(
 ): Promise<void> {
   // Build realm payload from template
   const payload = JSON.parse(realmTemplate.replace(/__REALM_NAME__/g, realmName));
+  const bffClient = payload.clients?.find(
+    (client: { clientId?: string }) => client.clientId === config.keycloakBffClientId,
+  );
+  if (bffClient) {
+    bffClient.secret = config.keycloakBffClientSecret;
+    bffClient.redirectUris = [config.identityRedirectUri];
+  }
   payload.groups = cities.map((c) => ({ name: c }));
 
   const resp = await fetch(adminUrl("/admin/realms"), {
