@@ -59,7 +59,7 @@ Three new services in `tilt-demo/docker-compose.deploy.yaml`:
 One-shot container that creates the `keycloak` database in PostgreSQL. Idempotent — safe to run multiple times. Connects directly to `postgres-db:5432` (not pgbouncer, because DDL statements can't run through transaction-mode pgbouncer).
 
 ### keycloak
-Keycloak 24.0 running in dev mode with realm auto-import. On first boot, imports `keycloak/realm-export.json` which creates the `digit-sandbox` realm.
+Keycloak 26.7.3 running in dev mode with realm auto-import. On first boot, imports `keycloak/realm-export.json` which creates the `digit-sandbox` realm.
 
 Key environment variables:
 | Variable | Value | Purpose |
