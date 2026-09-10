@@ -1,3 +1,35 @@
+import type { OrganizationTenantMapping } from "./types.js";
+
+export function parseOrganizationTenantMappings(
+  raw: string,
+): OrganizationTenantMapping[] {
+  if (!raw.trim()) return [];
+
+  const value: unknown = JSON.parse(raw);
+  if (!Array.isArray(value)) {
+    throw new Error("KEYCLOAK_ORG_TENANT_MAPPINGS must be a JSON array");
+  }
+
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`KEYCLOAK_ORG_TENANT_MAPPINGS[${index}] must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    for (const field of ["organizationId", "tenantId", "name"] as const) {
+      if (typeof candidate[field] !== "string" || !candidate[field].trim()) {
+        throw new Error(
+          `KEYCLOAK_ORG_TENANT_MAPPINGS[${index}].${field} must be a non-empty string`,
+        );
+      }
+    }
+    return {
+      organizationId: (candidate.organizationId as string).trim(),
+      tenantId: (candidate.tenantId as string).trim(),
+      name: (candidate.name as string).trim(),
+    };
+  });
+}
+
 export const config = {
   port: parseInt(process.env.PORT || "3000"),
 
@@ -15,6 +47,10 @@ export const config = {
   // Keycloak
   keycloakIssuer: process.env.KEYCLOAK_ISSUER || "http://localhost:8180/auth/realms/digit-sandbox",
   keycloakJwksUri: process.env.KEYCLOAK_JWKS_URI || "http://localhost:8180/auth/realms/digit-sandbox/protocol/openid-connect/certs",
+  keycloakAudience: process.env.KEYCLOAK_AUDIENCE || "digit-ui",
+  organizationTenantMappings: parseOrganizationTenantMappings(
+    process.env.KEYCLOAK_ORG_TENANT_MAPPINGS || "",
+  ),
 
   // Keycloak Admin
   keycloakAdminUrl: process.env.KEYCLOAK_ADMIN_URL || "http://localhost:8180",

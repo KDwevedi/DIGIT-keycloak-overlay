@@ -1,6 +1,7 @@
 {
   "realm": "__REALM_NAME__",
   "enabled": true,
+  "organizationsEnabled": true,
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
@@ -82,10 +83,52 @@
         "roles",
         "email",
         "groups"
+      ],
+      "optionalClientScopes": [
+        "organization"
       ]
     }
   ],
   "clientScopes": [
+    {
+      "name": "organization",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "organization",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-organization-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "organization",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "addOrganizationId": "true"
+          }
+        },
+        {
+          "name": "organization groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-organization-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "addGroupRoleMappings": "true"
+          }
+        }
+      ]
+    },
     {
       "name": "groups",
       "protocol": "openid-connect",

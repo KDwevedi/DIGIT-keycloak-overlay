@@ -60,4 +60,33 @@ describe("validateJwt", () => {
     // so realm should be "digit-sandbox"
     expect(claims!.realm).toBe("digit-sandbox");
   });
+
+  it("can pin the issuer and audience for identity endpoints", async () => {
+    const token = await signJwt({
+      sub: "user-1",
+      email: "a@b.com",
+      aud: "digit-ui",
+    });
+    const claims = await validateJwt(`Bearer ${token}`, {
+      issuer: "http://localhost:9999/realms/digit-sandbox",
+      audience: "digit-ui",
+    });
+    expect(claims?.sub).toBe("user-1");
+  });
+
+  it("rejects another issuer or audience when pinned", async () => {
+    const token = await signJwt({
+      sub: "user-1",
+      email: "a@b.com",
+      aud: "digit-ui",
+    });
+    expect(await validateJwt(`Bearer ${token}`, {
+      issuer: "https://issuer.example/realms/other",
+      audience: "digit-ui",
+    })).toBeNull();
+    expect(await validateJwt(`Bearer ${token}`, {
+      issuer: "http://localhost:9999/realms/digit-sandbox",
+      audience: "other-client",
+    })).toBeNull();
+  });
 });

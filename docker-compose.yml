@@ -28,6 +28,8 @@ services:
       DIGIT_DEFAULT_TENANT: pg.citya
       KEYCLOAK_ISSUER: http://keycloak:8180/realms/digit-sandbox
       KEYCLOAK_JWKS_URI: http://keycloak:8180/realms/digit-sandbox/protocol/openid-connect/certs
+      KEYCLOAK_AUDIENCE: digit-sandbox-ui
+      KEYCLOAK_ORG_TENANT_MAPPINGS: "[]"
       KEYCLOAK_ADMIN_URL: http://keycloak:8180
       KEYCLOAK_ADMIN_USERNAME: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}

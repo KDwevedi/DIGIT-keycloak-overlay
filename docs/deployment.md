@@ -79,6 +79,8 @@ Key environment variables:
 |----------|-------|---------|
 | `KEYCLOAK_ISSUER` | `https://api.egov.theflywheel.in/auth/realms/digit-sandbox` | Default realm issuer (fallback for single-realm mode) |
 | `KEYCLOAK_JWKS_URI` | `http://keycloak:8180/auth/realms/...` | Internal URL for fetching signing keys |
+| `KEYCLOAK_AUDIENCE` | `digit-ui` | Required audience for identity APIs |
+| `KEYCLOAK_ORG_TENANT_MAPPINGS` | `[]` | JSON array mapping immutable Keycloak Organization IDs to DIGIT tenants and display names |
 | `DIGIT_USER_HOST` | `http://egov-user:8107` | DIGIT user service |
 | `DIGIT_SYSTEM_USERNAME` | `ADMIN` | System account for forwarding requests |
 | `REDIS_HOST` | `redis` | Cache for resolved users |
@@ -213,10 +215,12 @@ See [role-management.md](role-management.md) for detailed role management docume
 
 ## Realm Configuration
 
-### Realm-per-Tenant Architecture
+### Legacy Realm-per-Tenant Provisioning
 
-Instead of a single `digit-sandbox` realm, the system now provisions **one realm per
-DIGIT state root** using a template. The `digit-sandbox` realm export
+The existing startup synchronizer provisions **one realm per DIGIT state root**
+using a template. This remains during migration. The target identity-BFF model
+uses one shared realm with Keycloak Organizations mapped to DIGIT root tenants.
+The `digit-sandbox` realm export
 (`keycloak/realm-export.json`) is used for Keycloak's initial import on first boot.
 Subsequent realms are created dynamically from `keycloak/realm-template.json`.
 
@@ -245,6 +249,31 @@ Each realm gets a `digit-ui` public OIDC client (from the template):
 - **Flow**: Authorization Code + PKCE (no client secret)
 - **Redirect URIs**: `http://localhost:*`, `https://*.egov.theflywheel.in/*`
 - **Web Origins**: `http://localhost:3000`, `http://localhost:5173`, `https://*.egov.theflywheel.in`
+
+### Organizations and tenant choices
+
+The realm templates enable Organizations and attach the built-in optional
+`organization` scope to the UI client. The Organization membership mapper emits
+the immutable Organization ID. The Organization group mapper emits group paths
+and their realm/client roles inside each Organization claim.
+
+Clients must request `organization:*` to obtain every Organization membership
+needed by the chooser. `GET /identity/v1/tenants` then intersects that signed
+claim with `KEYCLOAK_ORG_TENANT_MAPPINGS`. Mapping entries use this shape:
+
+```json
+[
+  {
+    "organizationId": "4bb42b7e-...",
+    "tenantId": "ke.bomet",
+    "name": "Bomet County"
+  }
+]
+```
+
+This bearer-token endpoint is a migration/demo API. The completed BFF will hold
+Keycloak tokens server-side, authenticate this route with an opaque cookie, and
+filter again by persisted active DIGIT membership before returning choices.
 
 ### Groups (City Tenants)
 

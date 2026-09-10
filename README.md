@@ -18,6 +18,33 @@ DIGIT services see a normal authenticated request — no code changes needed.
 
 ## Quick Start
 
+### Organization tenant-list demo
+
+The bundled Keycloak 26.7.3 realm has Organizations enabled. Request
+`scope=openid profile email organization:*` during Authorization Code + PKCE
+login, then configure the immutable Organization IDs that may become DIGIT
+tenant choices:
+
+```bash
+export KEYCLOAK_AUDIENCE=digit-ui
+export KEYCLOAK_ORG_TENANT_MAPPINGS='[
+  {"organizationId":"<bomet-org-uuid>","tenantId":"ke.bomet","name":"Bomet County"},
+  {"organizationId":"<kisumu-org-uuid>","tenantId":"ke.kisumu","name":"Kisumu County"}
+]'
+```
+
+The transitional demo API accepts the Keycloak access token directly:
+
+```http
+GET /identity/v1/tenants
+Authorization: Bearer <keycloak-access-token>
+```
+
+It returns only mapped Organizations present in the verified token, with roles
+from each Organization's groups kept separate. The target BFF flow will replace
+the bearer header with an opaque `HttpOnly` session cookie and additionally
+intersect these choices with persisted active DIGIT memberships.
+
 ### Run Tests (requires Redis)
 
 ```bash

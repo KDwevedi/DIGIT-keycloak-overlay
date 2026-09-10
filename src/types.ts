@@ -9,7 +9,24 @@ export interface KCClaims {
     roles: string[];
   };
   groups?: string[];
+  organization?: Record<string, KCOrganizationClaim>;
   realm?: string;  // extracted from iss claim
+}
+
+export interface KCOrganizationClaim {
+  id?: string;
+  groups?: string[];
+  realm_access?: {
+    roles?: string[];
+  };
+  resource_access?: Record<string, { roles?: string[] }>;
+  [attribute: string]: unknown;
+}
+
+export interface OrganizationTenantMapping {
+  organizationId: string;
+  tenantId: string;
+  name: string;
 }
 
 export interface DigitUser {
