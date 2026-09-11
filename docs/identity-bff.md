@@ -53,6 +53,11 @@ and immutable Organization IDs.
 This API is the authority for durable account and membership state. Keycloak
 claims alone never create a DIGIT session.
 
+`KEYCLOAK_ISSUER` is the exact public issuer used in tokens and browser
+redirects. When the BFF reaches Keycloak over a private network, set
+`KEYCLOAK_OIDC_BACKCHANNEL_URL` to that internal realm URL; issuer validation
+still uses the public value.
+
 ## Control-plane API
 
 All routes are protected by `IDENTITY_CONTROL_PLANE_TOKEN` and are idempotent:

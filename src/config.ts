@@ -96,6 +96,10 @@ export const config = {
 
   // Keycloak
   keycloakIssuer: process.env.KEYCLOAK_ISSUER || "http://localhost:8180/auth/realms/digit-sandbox",
+  keycloakOidcBackchannelUrl:
+    process.env.KEYCLOAK_OIDC_BACKCHANNEL_URL ||
+    process.env.KEYCLOAK_ISSUER ||
+    "http://localhost:8180/auth/realms/digit-sandbox",
   keycloakJwksUri: process.env.KEYCLOAK_JWKS_URI || "http://localhost:8180/auth/realms/digit-sandbox/protocol/openid-connect/certs",
   keycloakAudience: process.env.KEYCLOAK_AUDIENCE || "digit-ui",
   keycloakBffClientId,

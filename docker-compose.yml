@@ -9,6 +9,8 @@ services:
     command: start-dev --import-realm
     environment:
       KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME: http://localhost:18180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HTTP_ENABLED: "true"
       KC_HTTP_PORT: 8180
       KEYCLOAK_ADMIN: admin
@@ -23,7 +25,8 @@ services:
     command: ["node", "--import", "./dist/instrumentation.js", "dist/identity-server.js"]
     environment:
       PORT: 3000
-      KEYCLOAK_ISSUER: http://keycloak:8180/realms/digit-sandbox
+      KEYCLOAK_ISSUER: http://localhost:18180/realms/digit-sandbox
+      KEYCLOAK_OIDC_BACKCHANNEL_URL: http://keycloak:8180/realms/digit-sandbox
       KEYCLOAK_JWKS_URI: http://keycloak:8180/realms/digit-sandbox/protocol/openid-connect/certs
       KEYCLOAK_BFF_CLIENT_ID: digit-identity-bff
       KEYCLOAK_BFF_CLIENT_SECRET: ${KEYCLOAK_BFF_CLIENT_SECRET:-dev-only-change-me}

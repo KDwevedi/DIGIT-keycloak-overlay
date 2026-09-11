@@ -70,6 +70,8 @@ Key environment variables:
 | Variable | Purpose |
 |----------|---------|
 | `KEYCLOAK_BFF_CLIENT_ID` / `KEYCLOAK_BFF_CLIENT_SECRET` | Confidential Authorization Code client |
+| `KEYCLOAK_ISSUER` | Exact public issuer and browser-facing realm URL |
+| `KEYCLOAK_OIDC_BACKCHANNEL_URL` | Optional private realm URL for token/logout calls |
 | `KEYCLOAK_ORGANIZATION_REALM` | Shared Organizations-enabled realm |
 | `IDENTITY_AUTH_METHODS` | Sign-in methods displayed by the frontend |
 | `IDENTITY_REDIRECT_URI` | Exact Keycloak callback URI |

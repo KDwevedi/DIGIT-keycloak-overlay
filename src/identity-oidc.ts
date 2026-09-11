@@ -2,8 +2,11 @@ import { config } from "./config.js";
 import { validateJwt } from "./jwt.js";
 import type { IdentityTokenSet, KCClaims } from "./types.js";
 
-function oidcUrl(path: string): string {
-  return `${config.keycloakIssuer}/protocol/openid-connect/${path}`;
+function oidcUrl(path: string, backchannel = false): string {
+  const base = backchannel
+    ? config.keycloakOidcBackchannelUrl
+    : config.keycloakIssuer;
+  return `${base.replace(/\/$/, "")}/protocol/openid-connect/${path}`;
 }
 
 export function authorizationUrl(
@@ -32,7 +35,7 @@ async function tokenRequest(params: URLSearchParams): Promise<IdentityTokenSet> 
   params.set("client_id", config.keycloakBffClientId);
   params.set("client_secret", config.keycloakBffClientSecret);
 
-  const response = await fetch(oidcUrl("token"), {
+  const response = await fetch(oidcUrl("token", true), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),
@@ -109,7 +112,7 @@ export async function verifyIdentityAccessToken(
 
 export async function logoutFromKeycloak(refreshToken?: string): Promise<void> {
   if (!refreshToken) return;
-  const response = await fetch(oidcUrl("logout"), {
+  const response = await fetch(oidcUrl("logout", true), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
