@@ -10,6 +10,8 @@ export interface KCClaims {
   };
   groups?: string[];
   organization?: Record<string, KCOrganizationClaim>;
+  nonce?: string;
+  azp?: string;
   realm?: string;  // extracted from iss claim
 }
 
@@ -31,9 +33,24 @@ export interface OrganizationTenantMapping {
 
 export interface IdentityTokenSet {
   accessToken: string;
+  idToken?: string;
   refreshToken?: string;
   accessExpiresIn: number;
   refreshExpiresIn?: number;
+}
+
+export interface IdentityAuthMethod {
+  id: string;
+  label: string;
+  type: "password" | "oauth" | "magic_link";
+  idpHint?: string;
+}
+
+export interface SelectedIdentityContext {
+  organizationId: string;
+  organizationAlias: string;
+  tenantId: string;
+  name: string;
 }
 
 export interface IdentitySession {

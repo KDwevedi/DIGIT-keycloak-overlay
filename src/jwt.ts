@@ -92,6 +92,8 @@ export async function validateJwt(
       groups: (verified.groups as string[]) || undefined,
       organization:
         (verified.organization as KCClaims["organization"]) || undefined,
+      nonce: (verified.nonce as string) || undefined,
+      azp: (verified.azp as string) || undefined,
       realm,
     };
   } catch (err) {

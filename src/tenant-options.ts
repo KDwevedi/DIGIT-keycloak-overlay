@@ -4,6 +4,7 @@ import type {
 } from "./types.js";
 
 export interface TenantOption {
+  organizationId: string;
   tenantId: string;
   name: string;
   organizationAlias: string;
@@ -25,6 +26,7 @@ export function tenantOptionsFromClaims(
       if (!mapping) return [];
 
       return [{
+        organizationId: organization.id,
         tenantId: mapping.tenantId,
         name: mapping.name,
         organizationAlias,

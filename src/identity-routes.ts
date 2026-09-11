@@ -6,6 +6,7 @@ import {
   logoutFromKeycloak,
   refreshIdentityTokens,
   verifyIdentityAccessToken,
+  verifyIdentityIdToken,
 } from "./identity-oidc.js";
 import {
   clearedLoginCookie,
@@ -15,14 +16,23 @@ import {
   createLoginAttempt,
   deleteIdentitySession,
   getIdentitySession,
+  getSelectedIdentityContext,
   loginCookie,
   loginStateFromCookie,
   saveIdentitySession,
+  saveSelectedIdentityContext,
   sessionCookie,
   sessionIdFromCookie,
 } from "./identity-session.js";
-import { tenantOptionsFromClaims } from "./tenant-options.js";
+import {
+  DigitIdentityUnavailableError,
+  issueDigitContext,
+  resolveActiveTenantOptions,
+} from "./digit-identity.js";
+import type { TenantOption } from "./tenant-options.js";
 import type { IdentitySession } from "./types.js";
+import { enabledIdentityMethods } from "./identity-methods.js";
+import { IdentityAdminError } from "./identity-admin.js";
 
 function asyncRoute(
   handler: (req: express.Request, res: express.Response) => Promise<unknown>,
@@ -30,6 +40,15 @@ function asyncRoute(
   return (req, res, next) => {
     void handler(req, res).catch(next);
   };
+}
+
+function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOption) {
+  return tenant;
+}
+
+function trustedWriteOrigin(req: express.Request): boolean {
+  const origin = req.get("origin");
+  return !origin || origin === config.identityAllowedOrigin;
 }
 
 async function currentSession(
@@ -78,10 +97,39 @@ export function registerIdentityRoutes(app: express.Application): void {
     next();
   });
 
-  app.get("/identity/v1/authorize", asyncRoute(async (_req, res) => {
-    const { state, codeChallenge } = await createLoginAttempt();
+  app.get("/identity/v1/auth-methods", asyncRoute(async (_req, res) => {
+    try {
+      return res.json({ methods: await enabledIdentityMethods() });
+    } catch (error) {
+      if (error instanceof IdentityAdminError) {
+        return res.status(503).json({ error: "Sign-in methods are temporarily unavailable" });
+      }
+      throw error;
+    }
+  }));
+
+  app.get("/identity/v1/authorize", asyncRoute(async (req, res) => {
+    const requestedMethod = typeof req.query.method === "string"
+      ? req.query.method
+      : "password";
+    let methods;
+    try {
+      methods = await enabledIdentityMethods();
+    } catch (error) {
+      if (error instanceof IdentityAdminError) {
+        return res.status(503).json({ error: "Sign-in methods are temporarily unavailable" });
+      }
+      throw error;
+    }
+    const method = methods.find((candidate) => candidate.id === requestedMethod);
+    if (!method) return res.status(400).json({ error: "Unsupported sign-in method" });
+
+    const { state, codeChallenge, nonce } = await createLoginAttempt();
     res.setHeader("Set-Cookie", loginCookie(state));
-    return res.redirect(302, authorizationUrl(state, codeChallenge));
+    return res.redirect(
+      302,
+      authorizationUrl(state, codeChallenge, nonce, method.idpHint),
+    );
   }));
 
   app.get("/identity/v1/callback", asyncRoute(async (req, res) => {
@@ -101,6 +149,10 @@ export function registerIdentityRoutes(app: express.Application): void {
     try {
       const tokens = await exchangeAuthorizationCode(code, attempt.codeVerifier);
       const claims = await verifyIdentityAccessToken(tokens.accessToken);
+      const idClaims = await verifyIdentityIdToken(tokens.idToken, attempt.nonce);
+      if (idClaims.sub !== claims.sub) {
+        throw new Error("Keycloak token subjects do not match");
+      }
       const { sessionId, maxAge } = await createIdentitySession(tokens, claims);
       res.setHeader("Set-Cookie", [
         sessionCookie(sessionId, maxAge),
@@ -118,6 +170,7 @@ export function registerIdentityRoutes(app: express.Application): void {
     const current = await currentSession(req.headers.cookie);
     if (!current) return res.status(401).json({ authenticated: false });
     const { claims } = current.session;
+    const context = await getSelectedIdentityContext(current.sessionId);
     return res.json({
       authenticated: true,
       user: {
@@ -126,6 +179,10 @@ export function registerIdentityRoutes(app: express.Application): void {
         name: claims.name,
         preferredUsername: claims.preferred_username,
       },
+      context: context ? {
+        tenantId: context.tenantId,
+        name: context.name,
+      } : null,
       expiresAt: current.session.accessExpiresAt,
     });
   }));
@@ -135,14 +192,65 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
-    const tenants = tenantOptionsFromClaims(
-      current.session.claims,
-      config.organizationTenantMappings,
-    );
-    return res.json({ tenants, selectionRequired: tenants.length > 1 });
+    try {
+      const tenants = await resolveActiveTenantOptions(current.session.claims);
+      return res.json({
+        tenants: tenants.map(publicTenant),
+        selectionRequired: tenants.length > 1,
+        onboardingRequired: tenants.length === 0,
+      });
+    } catch (error) {
+      if (error instanceof DigitIdentityUnavailableError) {
+        console.warn("Tenant context resolution failed:", error.message);
+        return res.status(503).json({ error: "Tenant options are temporarily unavailable" });
+      }
+      throw error;
+    }
+  }));
+
+  app.post("/identity/v1/contexts/_select", asyncRoute(async (req, res) => {
+    if (!trustedWriteOrigin(req)) {
+      return res.status(403).json({ error: "Untrusted request origin" });
+    }
+    const current = await currentSession(req.headers.cookie);
+    if (!current) {
+      return res.status(401).json({ error: "Invalid or missing identity session" });
+    }
+    const tenantId = typeof req.body?.tenantId === "string"
+      ? req.body.tenantId.trim()
+      : "";
+    if (!tenantId) return res.status(400).json({ error: "tenantId is required" });
+
+    try {
+      const tenants = await resolveActiveTenantOptions(current.session.claims);
+      const selected = tenants.find((tenant) => tenant.tenantId === tenantId);
+      if (!selected) {
+        return res.status(403).json({ error: "Tenant context is not available" });
+      }
+      const digitSession = await issueDigitContext(current.session.claims, selected);
+      const saved = await saveSelectedIdentityContext(current.sessionId, {
+        organizationId: selected.organizationId,
+        organizationAlias: selected.organizationAlias,
+        tenantId: selected.tenantId,
+        name: selected.name,
+      });
+      if (!saved) {
+        return res.status(401).json({ error: "Identity session expired" });
+      }
+      return res.json(digitSession);
+    } catch (error) {
+      if (error instanceof DigitIdentityUnavailableError) {
+        console.warn("DIGIT context issuance failed:", error.message);
+        return res.status(503).json({ error: "Sign-in context is temporarily unavailable" });
+      }
+      throw error;
+    }
   }));
 
   app.post("/identity/v1/logout", asyncRoute(async (req, res) => {
+    if (!trustedWriteOrigin(req)) {
+      return res.status(403).json({ error: "Untrusted request origin" });
+    }
     const sessionId = sessionIdFromCookie(req.headers.cookie);
     if (sessionId) {
       const session = await getIdentitySession(sessionId);

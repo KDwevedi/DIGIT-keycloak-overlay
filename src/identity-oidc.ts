@@ -6,17 +6,25 @@ function oidcUrl(path: string): string {
   return `${config.keycloakIssuer}/protocol/openid-connect/${path}`;
 }
 
-export function authorizationUrl(state: string, codeChallenge: string): string {
+export function authorizationUrl(
+  state: string,
+  codeChallenge: string,
+  nonce: string,
+  idpHint?: string,
+): string {
   const url = new URL(oidcUrl("auth"));
-  url.search = new URLSearchParams({
+  const params = new URLSearchParams({
     client_id: config.keycloakBffClientId,
     redirect_uri: config.identityRedirectUri,
     response_type: "code",
     scope: config.identityScope,
     state,
+    nonce,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  }).toString();
+  });
+  if (idpHint) params.set("kc_idp_hint", idpHint);
+  url.search = params.toString();
   return url.toString();
 }
 
@@ -41,6 +49,7 @@ async function tokenRequest(params: URLSearchParams): Promise<IdentityTokenSet> 
 
   return {
     accessToken: body.access_token,
+    idToken: typeof body.id_token === "string" ? body.id_token : undefined,
     refreshToken:
       typeof body.refresh_token === "string" ? body.refresh_token : undefined,
     accessExpiresIn: body.expires_in,
@@ -49,6 +58,21 @@ async function tokenRequest(params: URLSearchParams): Promise<IdentityTokenSet> 
         ? body.refresh_expires_in
         : undefined,
   };
+}
+
+export async function verifyIdentityIdToken(
+  idToken: string | undefined,
+  expectedNonce: string,
+): Promise<KCClaims> {
+  if (!idToken) throw new Error("Keycloak did not return an ID token");
+  const claims = await validateJwt(`Bearer ${idToken}`, {
+    issuer: config.keycloakIssuer,
+    audience: config.keycloakBffClientId,
+  });
+  if (!claims || claims.nonce !== expectedNonce) {
+    throw new Error("Keycloak returned an invalid ID token");
+  }
+  return claims;
 }
 
 export function exchangeAuthorizationCode(

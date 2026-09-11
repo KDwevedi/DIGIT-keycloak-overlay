@@ -1,59 +1,77 @@
-# DIGIT Keycloak Overlay
+# DIGIT Identity BFF / Keycloak Overlay
 
-An anti-corruption layer that bridges Keycloak authentication to DIGIT's internal auth system. Users sign up and log in via Keycloak; the overlay transparently provisions them in DIGIT and injects the correct `RequestInfo` into every API request.
+An identity boundary between browsers, DIGIT services, and Keycloak. It owns
+OIDC login, server-side Keycloak sessions, Organization-based tenant selection,
+issuance of tenant-scoped DIGIT sessions, and the small Keycloak provisioning
+API used by onboarding or reconciliation workers.
+
+The BFF has **no dependency on PGR**. PGR can call its internal APIs during an
+onboarding saga, but the BFF builds and starts without PGR and never calls PGR.
 
 **Design doc:** [docs/plans/2026-03-05-keycloak-acl-design.md](docs/plans/2026-03-05-keycloak-acl-design.md)
+**Identity BFF v1:** [docs/identity-bff.md](docs/identity-bff.md)
 **Architecture gist:** [github.com/ChakshuGautam/dcd9b7f5...](https://gist.github.com/ChakshuGautam/dcd9b7f561016016dd455607f7927f94)
 
 ## How It Works
 
-1. User authenticates with Keycloak (email/password, Google SSO, etc.)
-2. Frontend sends requests with `Authorization: Bearer <keycloak-jwt>`
-3. Token-exchange-svc validates the JWT via Keycloak's JWKS endpoint
-4. Resolves/provisions a DIGIT user (lazy creation on first API call)
-5. Injects a system token + user info into `RequestInfo`
-6. Proxies to upstream DIGIT services (PGR, workflow, MDMS, etc.)
+```text
+Browser ── OIDC/session/tenant choice ──> Identity BFF ──> Keycloak
+                                              │
+                                              └──> durable DIGIT identity API
 
-DIGIT services see a normal authenticated request — no code changes needed.
+PGR or another onboarding worker ── workload auth ──> Identity BFF ──> Keycloak Admin API
+
+Browser ── tenant-scoped DIGIT token ──> Kong ──> PGR and other DIGIT APIs
+```
+
+Only the identity BFF talks to Keycloak. Normal application requests do not
+pass through it, and no Keycloak access or refresh token is exposed to the
+browser.
 
 ## Quick Start
 
 ### Organization tenant-list demo
 
-The bundled Keycloak 26.7.3 realm has Organizations enabled. Request
-`scope=openid profile email organization:*` during Authorization Code + PKCE
-login, then configure the immutable Organization IDs that may become DIGIT
-tenant choices:
+The bundled Keycloak 26.7.3 realm has Organizations enabled. Configure the
+confidential BFF client, its browser origin, and the durable DIGIT identity API:
 
 ```bash
 export KEYCLOAK_AUDIENCE=digit-ui
 export KEYCLOAK_BFF_CLIENT_SECRET='<same-secret-configured-on-the-bff-client>'
-export KEYCLOAK_ORG_TENANT_MAPPINGS='[
-  {"organizationId":"<bomet-org-uuid>","tenantId":"ke.bomet","name":"Bomet County"},
-  {"organizationId":"<kisumu-org-uuid>","tenantId":"ke.kisumu","name":"Kisumu County"}
-]'
+export IDENTITY_ALLOWED_ORIGIN='http://localhost:3000'
+export DIGIT_IDENTITY_SERVICE_URL='http://digit-identity:8080/internal/identity/v1'
+export DIGIT_IDENTITY_SERVICE_TOKEN='<workload-token>'
+export IDENTITY_CONTROL_PLANE_TOKEN='<different-workload-token>'
 ```
 
-Start sign-in through the BFF:
+Browser API:
 
 ```http
-GET /identity/v1/authorize
-```
-
-Keycloak returns to `/identity/v1/callback`. The BFF exchanges and verifies the
-authorization code, stores all Keycloak tokens in Redis, and gives the browser
-only an opaque `HttpOnly` cookie. The browser can then call:
-
-```text
+GET  /identity/v1/auth-methods
+GET  /identity/v1/authorize?method=password
+GET  /identity/v1/callback
 GET  /identity/v1/session
 GET  /identity/v1/tenants
+POST /identity/v1/contexts/_select
 POST /identity/v1/logout
 ```
 
-The tenant endpoint returns only mapped Organizations present in the verified
-server-side session, with roles from each Organization's groups kept separate.
-Persisted active DIGIT membership remains an additional filter for the next
-backend slice.
+`GET /identity/v1/tenants` returns only the intersection of signed Keycloak
+Organization memberships and active durable DIGIT memberships. Selecting one
+returns a short-lived, tenant-scoped DIGIT login response. The browser then uses
+that DIGIT access token through Kong for PGR and all other normal APIs.
+
+Internal control-plane API (workload bearer token required):
+
+```http
+POST /internal/identity/v1/organizations/_ensure
+POST /internal/identity/v1/memberships/_ensure
+POST /internal/identity/v1/role-assignments/_ensure
+```
+
+These idempotent routes are suitable for PGR onboarding, another domain's
+onboarding, or a startup/scheduled reconciliation worker. They contain no PGR
+model or URL.
 
 ### Run Tests (requires Redis)
 
@@ -69,11 +87,12 @@ npm test
 ### Run Full Stack
 
 ```bash
-# Starts Keycloak + Redis + token-exchange-svc
+# Starts Keycloak, Redis, standalone identity BFF, and the legacy exchange proxy
 docker compose up -d
 
 # Keycloak admin: http://localhost:18180 (admin/admin)
-# Token exchange: http://localhost:18200
+# Standalone identity BFF: http://localhost:18201
+# Legacy token exchange: http://localhost:18200
 ```
 
 ### Integrate with DIGIT (tilt-demo)
@@ -113,6 +132,11 @@ src/
   config.ts         # Environment config with defaults
   types.ts          # TypeScript interfaces
   jwt.ts            # JWKS-based JWT validation (jose)
+  identity-routes.ts         # Browser-facing identity BFF
+  identity-session.ts        # Opaque cookie and Redis-backed KC session
+  digit-identity.ts          # Durable identity/membership/session client
+  identity-control-routes.ts # Workload-authenticated provisioning API
+  identity-admin.ts          # Keycloak Organization/member/role operations
   cache.ts          # Redis cache with TTL
   digit-client.ts   # egov-user HTTP client
   user-resolver.ts  # KC claims -> DIGIT user (core logic)
@@ -129,7 +153,15 @@ keycloak/
 
 ## Key Design Decisions
 
+- **One Keycloak boundary**: browsers and backend provisioning callers use the
+  identity service; neither PGR nor the frontend receives Keycloak credentials
 - **Anti-corruption layer** (DDD pattern): Keycloak handles auth UX, DIGIT internals stay untouched
+- **Organization tenancy**: immutable Keycloak Organization IDs map to durable
+  DIGIT tenant identities; client roles are kept inside Organization groups
+- **Server-side Keycloak session**: the browser gets only an opaque HttpOnly
+  cookie, while the BFF manages Keycloak access/refresh token lifetime in Redis
+- **PGR-independent control plane**: idempotent ensure operations can be driven
+  by PGR, any other onboarding workflow, or reconciliation
 - **System token**: Uses `INTERNAL_MICROSERVICE_ROLE` to forward requests, no shadow passwords
 - **Lazy provisioning**: DIGIT users created on first API call, not at signup
 - **Content-type-aware proxy**: JSON bodies get RequestInfo rewritten, multipart streams through

@@ -18,6 +18,36 @@ services:
     ports:
       - "18180:8180"
 
+  identity-bff:
+    build: .
+    command: ["node", "--import", "./dist/instrumentation.js", "dist/identity-server.js"]
+    environment:
+      PORT: 3000
+      KEYCLOAK_ISSUER: http://keycloak:8180/realms/digit-sandbox
+      KEYCLOAK_JWKS_URI: http://keycloak:8180/realms/digit-sandbox/protocol/openid-connect/certs
+      KEYCLOAK_BFF_CLIENT_ID: digit-identity-bff
+      KEYCLOAK_BFF_CLIENT_SECRET: ${KEYCLOAK_BFF_CLIENT_SECRET:-dev-only-change-me}
+      KEYCLOAK_BFF_AUDIENCE: digit-identity-bff
+      KEYCLOAK_ADMIN_URL: http://keycloak:8180
+      KEYCLOAK_ADMIN_USERNAME: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KEYCLOAK_ORGANIZATION_REALM: digit-sandbox
+      KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS: digit-ui
+      IDENTITY_REDIRECT_URI: http://localhost:18201/identity/v1/callback
+      IDENTITY_POST_LOGIN_REDIRECT: http://localhost:3000/
+      IDENTITY_ALLOWED_ORIGIN: http://localhost:3000
+      IDENTITY_COOKIE_SECURE: "false"
+      IDENTITY_CONTROL_PLANE_TOKEN: ${IDENTITY_CONTROL_PLANE_TOKEN:-local-control-plane-token}
+      DIGIT_IDENTITY_SERVICE_URL: ${DIGIT_IDENTITY_SERVICE_URL:-}
+      DIGIT_IDENTITY_SERVICE_TOKEN: ${DIGIT_IDENTITY_SERVICE_TOKEN:-}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "18201:3000"
+    depends_on:
+      - redis
+      - keycloak
+
   token-exchange-svc:
     build: .
     environment:
@@ -32,7 +62,6 @@ services:
       KEYCLOAK_BFF_CLIENT_ID: digit-identity-bff
       KEYCLOAK_BFF_CLIENT_SECRET: ${KEYCLOAK_BFF_CLIENT_SECRET:-dev-only-change-me}
       KEYCLOAK_BFF_AUDIENCE: digit-identity-bff
-      KEYCLOAK_ORG_TENANT_MAPPINGS: "[]"
       IDENTITY_REDIRECT_URI: http://localhost:18200/identity/v1/callback
       IDENTITY_POST_LOGIN_REDIRECT: http://localhost:3000/
       IDENTITY_ALLOWED_ORIGIN: http://localhost:3000

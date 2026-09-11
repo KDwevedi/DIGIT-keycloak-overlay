@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseOrganizationTenantMappings } from "../../src/config.js";
+import {
+  parseIdentityAuthMethods,
+  parseOrganizationTenantMappings,
+} from "../../src/config.js";
 import { tenantOptionsFromClaims } from "../../src/tenant-options.js";
 
 describe("parseOrganizationTenantMappings", () => {
@@ -23,6 +26,21 @@ describe("parseOrganizationTenantMappings", () => {
     expect(() => parseOrganizationTenantMappings(
       '[{"organizationId":"org-bomet-id","tenantId":"ke.bomet"}]',
     )).toThrow(".name must be a non-empty string");
+  });
+});
+
+describe("parseIdentityAuthMethods", () => {
+  it("parses browser and broker methods", () => {
+    expect(parseIdentityAuthMethods(JSON.stringify([
+      { id: "password", label: "Password", type: "password" },
+      { id: "google", label: "Google", type: "oauth", idpHint: "google" },
+    ]))).toHaveLength(2);
+  });
+
+  it("requires an IdP hint for brokered methods", () => {
+    expect(() => parseIdentityAuthMethods(
+      '[{"id":"google","label":"Google","type":"oauth"}]',
+    )).toThrow("idpHint is required");
   });
 });
 
@@ -62,12 +80,14 @@ describe("tenantOptionsFromClaims", () => {
 
     expect(options).toEqual([
       {
+        organizationId: "org-bomet-id",
         tenantId: "ke.bomet",
         name: "Bomet County",
         organizationAlias: "bomet",
         roles: ["TENANT_ADMIN"],
       },
       {
+        organizationId: "org-kisumu-id",
         tenantId: "ke.kisumu",
         name: "Kisumu County",
         organizationAlias: "kisumu",

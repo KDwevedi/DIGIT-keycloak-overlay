@@ -1,10 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import { config } from "./config.js";
 import { getRedis } from "./cache.js";
-import type { IdentitySession, IdentityTokenSet, KCClaims } from "./types.js";
+import type {
+  IdentitySession,
+  IdentityTokenSet,
+  KCClaims,
+  SelectedIdentityContext,
+} from "./types.js";
 
 interface LoginAttempt {
   codeVerifier: string;
+  nonce: string;
 }
 
 function randomId(): string {
@@ -19,23 +25,29 @@ function sessionKey(sessionId: string): string {
   return `${config.cachePrefix}:identity:session:${sessionId}`;
 }
 
+function contextKey(sessionId: string): string {
+  return `${config.cachePrefix}:identity:context:${sessionId}`;
+}
+
 export async function createLoginAttempt(): Promise<{
   state: string;
   codeVerifier: string;
   codeChallenge: string;
+  nonce: string;
 }> {
   const state = randomId();
   const codeVerifier = randomId();
+  const nonce = randomId();
   const codeChallenge = createHash("sha256")
     .update(codeVerifier)
     .digest("base64url");
   await getRedis().set(
     loginKey(state),
-    JSON.stringify({ codeVerifier } satisfies LoginAttempt),
+    JSON.stringify({ codeVerifier, nonce } satisfies LoginAttempt),
     "EX",
     config.identityLoginTtlSeconds,
   );
-  return { state, codeVerifier, codeChallenge };
+  return { state, codeVerifier, codeChallenge, nonce };
 }
 
 export async function consumeLoginAttempt(
@@ -45,7 +57,8 @@ export async function consumeLoginAttempt(
   if (!raw) return null;
   try {
     const attempt = JSON.parse(raw) as LoginAttempt;
-    return typeof attempt.codeVerifier === "string" ? attempt : null;
+    return typeof attempt.codeVerifier === "string" &&
+      typeof attempt.nonce === "string" ? attempt : null;
   } catch {
     return null;
   }
@@ -103,7 +116,34 @@ export async function getIdentitySession(
 }
 
 export async function deleteIdentitySession(sessionId: string): Promise<void> {
-  await getRedis().del(sessionKey(sessionId));
+  await getRedis().del(sessionKey(sessionId), contextKey(sessionId));
+}
+
+export async function getSelectedIdentityContext(
+  sessionId: string,
+): Promise<SelectedIdentityContext | null> {
+  const raw = await getRedis().get(contextKey(sessionId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SelectedIdentityContext;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSelectedIdentityContext(
+  sessionId: string,
+  context: SelectedIdentityContext,
+): Promise<boolean> {
+  const ttl = await getRedis().ttl(sessionKey(sessionId));
+  if (ttl <= 0) return false;
+  await getRedis().set(
+    contextKey(sessionId),
+    JSON.stringify(context),
+    "EX",
+    ttl,
+  );
+  return true;
 }
 
 function cookieValue(cookieHeader: string | undefined, cookieName: string): string | null {

@@ -15,6 +15,7 @@ import { initKcAdmin, stopKcAdminRefresh, syncTenantRealms } from "./kc-admin.js
 import { searchUserByUserName, getSystemToken } from "./digit-client.js";
 import { registerPlatformAdminRoutes } from "./platform-admin.js";
 import { registerIdentityRoutes } from "./identity-routes.js";
+import { registerIdentityControlRoutes } from "./identity-control-routes.js";
 
 // Decode JWT payload without verification (for extracting sub from KC access tokens)
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -186,6 +187,7 @@ export async function createApp() {
   });
 
   registerIdentityRoutes(app);
+  registerIdentityControlRoutes(app);
 
   // Register endpoint: create user in Keycloak
   app.post("/register", async (req, res) => {

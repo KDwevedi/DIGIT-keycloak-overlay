@@ -91,7 +91,8 @@
       "serviceAccountsEnabled": false,
       "protocol": "openid-connect",
       "redirectUris": [
-        "http://localhost:18200/identity/v1/callback"
+        "http://localhost:18200/identity/v1/callback",
+        "http://localhost:18201/identity/v1/callback"
       ],
       "webOrigins": [],
       "attributes": {

@@ -66,6 +66,7 @@ export async function signJwt(
 
 export function createJwksApp() {
   const app = express();
+  app.use(express.json());
   app.get(
     "/realms/digit-sandbox/protocol/openid-connect/certs",
     (_req, res) => {
@@ -80,8 +81,12 @@ export function createJwksApp() {
       const validClient =
         req.body.client_id === "digit-identity-bff" &&
         req.body.client_secret === "test-bff-secret";
+      const code = String(req.body.code || "");
+      const nonce = code.startsWith("valid-code:")
+        ? code.slice("valid-code:".length)
+        : "";
       const validGrant = grantType === "authorization_code"
-        ? req.body.code === "valid-code" && Boolean(req.body.code_verifier)
+        ? Boolean(nonce) && Boolean(req.body.code_verifier)
         : grantType === "refresh_token" && req.body.refresh_token === "refresh-1";
       if (!validClient || !validGrant) {
         return res.status(400).json({ error: "invalid_grant" });
@@ -103,10 +108,17 @@ export function createJwksApp() {
           },
         },
       });
+      const idToken = await signJwt({
+        sub: "identity-user-1",
+        email: "person@example.com",
+        name: "Demo Person",
+        aud: "digit-identity-bff",
+        nonce: grantType === "authorization_code" ? nonce : undefined,
+      });
       return res.json({
         access_token: accessToken,
         refresh_token: "refresh-1",
-        id_token: "server-side-id-token",
+        id_token: idToken,
         expires_in: grantType === "authorization_code" ? 1 : 300,
         refresh_expires_in: 3600,
         token_type: "Bearer",
@@ -118,5 +130,73 @@ export function createJwksApp() {
     express.urlencoded({ extended: false }),
     (_req, res) => res.status(204).end(),
   );
+
+  const requireWorkload = (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => req.get("authorization") === "Bearer test-identity-workload"
+    ? next()
+    : res.status(401).json({ error: "unauthorized" });
+
+  app.post("/internal/identity/v1/contexts/_resolve", requireWorkload, (req, res) => {
+    if (req.body?.identity?.subject !== "identity-user-1") {
+      return res.json({ contexts: [] });
+    }
+    const requested = new Set(
+      (req.body?.organizations || []).map(
+        (organization: { organizationId?: string }) => organization.organizationId,
+      ),
+    );
+    const contexts = [
+      {
+        organizationId: "org-bomet-id",
+        tenantId: "ke.bomet",
+        name: "Bomet County",
+        roles: ["TENANT_ADMIN"],
+        active: true,
+      },
+      {
+        organizationId: "org-kisumu-id",
+        tenantId: "ke.kisumu",
+        name: "Kisumu County",
+        roles: ["VIEWER"],
+        active: true,
+      },
+    ].filter((context) => requested.has(context.organizationId));
+    return res.json({ contexts });
+  });
+
+  app.post("/internal/identity/v1/sessions/_issue", requireWorkload, (req, res) => {
+    const context = req.body?.context;
+    const rolesByTenant: Record<string, string[]> = {
+      "ke.bomet": ["TENANT_ADMIN"],
+      "ke.kisumu": ["VIEWER"],
+    };
+    const roleCodes = rolesByTenant[context?.tenantId];
+    if (!roleCodes || req.body?.identity?.subject !== "identity-user-1") {
+      return res.status(403).json({ error: "not eligible" });
+    }
+    return res.json({
+      access_token: `digit-token-${context.tenantId}`,
+      refresh_token: "identity-service-secret-that-must-not-reach-the-browser",
+      token_type: "bearer",
+      expires_in: 900,
+      UserRequest: {
+        uuid: "digit-user-1",
+        userName: "person@example.com",
+        name: "Demo Person",
+        emailId: "person@example.com",
+        mobileNumber: "0700000001",
+        tenantId: context.tenantId,
+        type: "EMPLOYEE",
+        roles: roleCodes.map((code) => ({
+          code,
+          name: code,
+          tenantId: context.tenantId,
+        })),
+      },
+    });
+  });
   return app;
 }

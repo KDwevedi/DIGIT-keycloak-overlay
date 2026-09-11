@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:identity": "tsx watch src/identity-server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "start:identity": "node dist/identity-server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

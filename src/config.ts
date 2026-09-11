@@ -1,4 +1,7 @@
-import type { OrganizationTenantMapping } from "./types.js";
+import type {
+  IdentityAuthMethod,
+  OrganizationTenantMapping,
+} from "./types.js";
 
 const keycloakBffClientId =
   process.env.KEYCLOAK_BFF_CLIENT_ID || "digit-identity-bff";
@@ -31,6 +34,50 @@ export function parseOrganizationTenantMappings(
       name: (candidate.name as string).trim(),
     };
   });
+}
+
+export function parseIdentityAuthMethods(raw: string): IdentityAuthMethod[] {
+  const value: unknown = JSON.parse(raw);
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("IDENTITY_AUTH_METHODS must be a non-empty JSON array");
+  }
+
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`IDENTITY_AUTH_METHODS[${index}] must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+    const type = candidate.type;
+    if (!id || !/^[a-z0-9_-]+$/.test(id)) {
+      throw new Error(`IDENTITY_AUTH_METHODS[${index}].id is invalid`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`IDENTITY_AUTH_METHODS contains duplicate id: ${id}`);
+    }
+    if (!label) {
+      throw new Error(`IDENTITY_AUTH_METHODS[${index}].label is required`);
+    }
+    if (type !== "password" && type !== "oauth" && type !== "magic_link") {
+      throw new Error(`IDENTITY_AUTH_METHODS[${index}].type is invalid`);
+    }
+    const idpHint = typeof candidate.idpHint === "string"
+      ? candidate.idpHint.trim()
+      : undefined;
+    if (type !== "password" && !idpHint) {
+      throw new Error(`IDENTITY_AUTH_METHODS[${index}].idpHint is required`);
+    }
+    seen.add(id);
+    return { id, label, type, ...(idpHint && { idpHint }) };
+  });
+}
+
+function keycloakIssuerRealm(): string {
+  const issuer = process.env.KEYCLOAK_ISSUER ||
+    "http://localhost:8180/auth/realms/digit-sandbox";
+  return issuer.split("/realms/").pop() || "digit-sandbox";
 }
 
 export const config = {
@@ -70,6 +117,10 @@ export const config = {
     process.env.IDENTITY_ALLOWED_ORIGIN || "http://localhost:3000",
   identityScope:
     process.env.IDENTITY_SCOPE || "openid profile email organization:*",
+  identityAuthMethods: parseIdentityAuthMethods(
+    process.env.IDENTITY_AUTH_METHODS ||
+      '[{"id":"password","label":"Password","type":"password"}]',
+  ),
   identityCookieName:
     process.env.IDENTITY_COOKIE_NAME || "digit_identity_session",
   identityCookieSecure: process.env.IDENTITY_COOKIE_SECURE !== "false",
@@ -79,6 +130,28 @@ export const config = {
   identitySessionTtlSeconds: parseInt(
     process.env.IDENTITY_SESSION_TTL_SECONDS || "604800",
   ),
+  identityControlPlaneToken:
+    process.env.IDENTITY_CONTROL_PLANE_TOKEN || "",
+
+  // Durable DIGIT identity/membership/session API. This is deliberately not
+  // a PGR URL: PGR is a control-plane caller, never an identity dependency.
+  digitIdentityServiceUrl:
+    process.env.DIGIT_IDENTITY_SERVICE_URL || "",
+  digitIdentityServiceToken:
+    process.env.DIGIT_IDENTITY_SERVICE_TOKEN || "",
+  digitIdentityClientId:
+    process.env.DIGIT_IDENTITY_CLIENT_ID || "digit-ui",
+  digitIdentityTimeoutMs: parseInt(
+    process.env.DIGIT_IDENTITY_TIMEOUT_MS || "5000",
+  ),
+  digitAccessTokenMaxTtlSeconds: parseInt(
+    process.env.DIGIT_ACCESS_TOKEN_MAX_TTL_SECONDS || "900",
+  ),
+  keycloakOrganizationRealm:
+    process.env.KEYCLOAK_ORGANIZATION_REALM || keycloakIssuerRealm(),
+  keycloakAllowedOrganizationRoleClients: (
+    process.env.KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS || "digit-ui"
+  ).split(",").map((value) => value.trim()).filter(Boolean),
 
   // Keycloak Admin
   keycloakAdminUrl: process.env.KEYCLOAK_ADMIN_URL || "http://localhost:8180",
