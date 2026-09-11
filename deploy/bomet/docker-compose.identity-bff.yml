@@ -10,8 +10,6 @@ services:
     container_name: digit-identity-bff
     command:
       - node
-      - --import
-      - ./dist/instrumentation.js
       - dist/identity-server.js
     restart: unless-stopped
     env_file:

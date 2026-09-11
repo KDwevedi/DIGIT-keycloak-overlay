@@ -22,7 +22,7 @@ services:
 
   identity-bff:
     build: .
-    command: ["node", "--import", "./dist/instrumentation.js", "dist/identity-server.js"]
+    command: ["node", "dist/identity-server.js"]
     environment:
       PORT: 3000
       KEYCLOAK_ISSUER: http://localhost:18180/realms/digit-sandbox
