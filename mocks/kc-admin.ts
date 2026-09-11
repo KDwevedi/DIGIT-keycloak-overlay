@@ -36,9 +36,15 @@ interface RealmState {
 }
 
 let realms: Map<string, RealmState>;
+let lastAdminGrantType: string | undefined;
 
 function initState() {
   realms = new Map();
+  lastAdminGrantType = undefined;
+}
+
+export function getLastAdminGrantType(): string | undefined {
+  return lastAdminGrantType;
 }
 
 export function resetState() {
@@ -86,7 +92,8 @@ export function createKcAdminMock() {
   app.post(
     "/realms/:realm/protocol/openid-connect/token",
     express.urlencoded({ extended: true }),
-    (_req, res) => {
+    (req, res) => {
+      lastAdminGrantType = req.body.grant_type;
       res.json({
         access_token: "mock-kc-admin-token",
         token_type: "Bearer",

@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createKcAdminMock, resetState } from "../../mocks/kc-admin.js";
+import {
+  createKcAdminMock,
+  getLastAdminGrantType,
+  resetState,
+} from "../../mocks/kc-admin.js";
 import { config } from "../../src/config.js";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -14,6 +18,7 @@ import {
 let server: Server;
 let port: number;
 let originalAdminUrl: string;
+let originalAdminClientSecret: string;
 
 beforeAll(async () => {
   const { app } = createKcAdminMock();
@@ -22,11 +27,14 @@ beforeAll(async () => {
 
   // Save and override config to point at our local mock
   originalAdminUrl = config.keycloakAdminUrl;
+  originalAdminClientSecret = config.keycloakAdminClientSecret;
   config.keycloakAdminUrl = `http://localhost:${port}`;
+  config.keycloakAdminClientSecret = "test-admin-client-secret";
 });
 
 afterAll(() => {
   config.keycloakAdminUrl = originalAdminUrl;
+  config.keycloakAdminClientSecret = originalAdminClientSecret;
   server?.close();
 });
 
@@ -39,6 +47,7 @@ describe("getAdminToken", () => {
     const token = await getAdminToken();
     expect(typeof token).toBe("string");
     expect(token).toBe("mock-kc-admin-token");
+    expect(getLastAdminGrantType()).toBe("client_credentials");
   });
 
   it("caches token (second call doesn't re-fetch)", async () => {

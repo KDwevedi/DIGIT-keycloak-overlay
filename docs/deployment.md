@@ -80,6 +80,7 @@ Key environment variables:
 | `DIGIT_IDENTITY_SERVICE_TOKEN` | Workload credential for that durable identity API |
 | `IDENTITY_CONTROL_PLANE_TOKEN` | Workload credential required by provisioning routes |
 | `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` | Comma-separated clients whose Organization-group roles may be managed |
+| `KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` | Dedicated Keycloak Admin service account |
 | `REDIS_HOST` / `REDIS_PORT` | Server-side Keycloak session storage |
 
 ### token-exchange-svc (legacy migration path)

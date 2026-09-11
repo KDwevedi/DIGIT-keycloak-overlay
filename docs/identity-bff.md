@@ -75,6 +75,10 @@ role-assignment route accepts only clients in
 `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` and makes that managed group's client-role
 set exact.
 
+Set `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a
+dedicated Keycloak service account. Password-grant admin configuration remains
+only as a migration fallback and should not be used for a new deployment.
+
 ## Failure behavior
 
 - Missing Redis or Keycloak prevents the relevant identity operation.

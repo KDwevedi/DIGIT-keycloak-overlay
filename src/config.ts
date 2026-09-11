@@ -161,6 +161,8 @@ export const config = {
   keycloakAdminUrl: process.env.KEYCLOAK_ADMIN_URL || "http://localhost:8180",
   keycloakAdminRealm: process.env.KEYCLOAK_ADMIN_REALM || "master",
   keycloakAdminClientId: process.env.KEYCLOAK_ADMIN_CLIENT_ID || "admin-cli",
+  keycloakAdminClientSecret:
+    process.env.KEYCLOAK_ADMIN_CLIENT_SECRET || "",
   keycloakAdminUsername: process.env.KEYCLOAK_ADMIN_USERNAME || "admin",
   keycloakAdminPassword: process.env.KEYCLOAK_ADMIN_PASSWORD || "admin",
   // HMAC secret used to derive a strong KC-internal password for users provisioned
