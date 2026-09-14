@@ -25,12 +25,6 @@ export interface KCOrganizationClaim {
   [attribute: string]: unknown;
 }
 
-export interface OrganizationTenantMapping {
-  organizationId: string;
-  tenantId: string;
-  name: string;
-}
-
 export interface IdentityTokenSet {
   accessToken: string;
   idToken?: string;

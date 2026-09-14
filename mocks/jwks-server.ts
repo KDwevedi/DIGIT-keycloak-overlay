@@ -67,13 +67,6 @@ export async function signJwt(
 export function createJwksApp() {
   const app = express();
   app.use(express.json());
-  const digitOrganizations = new Map<string, Record<string, unknown>>();
-  const digitMemberships = new Map<string, {
-    issuer: string;
-    subject: string;
-    organizationId: string;
-    active: boolean;
-  }>();
   app.get(
     "/realms/digit-sandbox/protocol/openid-connect/certs",
     (_req, res) => {
@@ -96,27 +89,19 @@ export function createJwksApp() {
         ? Boolean(nonce) && Boolean(req.body.code_verifier)
         : grantType === "refresh_token"
           ? req.body.refresh_token === "refresh-1"
-          : grantType === "urn:ietf:params:oauth:grant-type:token-exchange" &&
-            Boolean(req.body.subject_token) &&
-            req.body.audience === "digit-identity-exchange" &&
-            (req.body.scope === "organization:bomet" ||
-              req.body.scope === "organization:kisumu");
+          : false;
       if (!validClient || !validGrant) {
         return res.status(400).json({ error: "invalid_grant" });
       }
 
-      const selectedAlias = grantType ===
-        "urn:ietf:params:oauth:grant-type:token-exchange"
-        ? String(req.body.scope).slice("organization:".length)
-        : null;
       const organizations = {
         bomet: {
           id: "org-bomet-id",
-          realm_access: { roles: ["TENANT_ADMIN"] },
+          resource_access: { "digit-ui": { roles: ["GRO"] } },
         },
         kisumu: {
           id: "org-kisumu-id",
-          realm_access: { roles: ["VIEWER"] },
+          resource_access: { "digit-ui": { roles: ["PGR_VIEWER", "NOT_ALLOWLISTED"] } },
         },
       };
       const accessToken = await signJwt({
@@ -124,11 +109,11 @@ export function createJwksApp() {
         email: "person@example.com",
         name: "Demo Person",
         preferred_username: "demo.person",
+        email_verified: true,
+        phone_number: "0712345678",
         azp: "digit-identity-bff",
-        aud: selectedAlias ? "digit-identity-exchange" : "digit-identity-bff",
-        organization: selectedAlias
-          ? { [selectedAlias]: organizations[selectedAlias as keyof typeof organizations] }
-          : organizations,
+        aud: "digit-identity-bff",
+        organization: organizations,
       });
       const idToken = await signJwt({
         sub: "identity-user-1",
@@ -153,137 +138,5 @@ export function createJwksApp() {
     (_req, res) => res.status(204).end(),
   );
 
-  const requireWorkload = (
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction,
-  ) => req.get("authorization") === "Bearer test-identity-workload"
-    ? next()
-    : res.status(401).json({ error: "unauthorized" });
-
-  app.post("/internal/identity/v1/contexts/_resolve", requireWorkload, (req, res) => {
-    if (req.body?.identity?.subject !== "identity-user-1") {
-      return res.json({ contexts: [] });
-    }
-    const requested = new Set(
-      (req.body?.organizations || []).map(
-        (organization: { organizationId?: string }) => organization.organizationId,
-      ),
-    );
-    const contexts = [
-      {
-        organizationId: "org-bomet-id",
-        tenantId: "ke.bomet",
-        name: "Bomet County",
-        roles: ["TENANT_ADMIN"],
-        active: true,
-      },
-      {
-        organizationId: "org-kisumu-id",
-        tenantId: "ke.kisumu",
-        name: "Kisumu County",
-        roles: ["VIEWER"],
-        active: true,
-      },
-    ].filter((context) => requested.has(context.organizationId));
-    return res.json({ contexts });
-  });
-
-  app.post("/internal/identity/v1/organizations/_ensure", requireWorkload, (req, res) => {
-    digitOrganizations.set(req.body?.organizationId, {
-      ...req.body,
-      active: true,
-    });
-    return res.json({ tenantId: req.body?.tenantId });
-  });
-
-  const digitSubjects = new Map<string, string>();
-  app.post("/internal/identity/v1/employees/_ensure", requireWorkload, (req, res) => {
-    if (!digitOrganizations.has(req.body?.organizationId)) {
-      return res.status(404).json({ error: "Identity organization is not mapped" });
-    }
-    const key = `${req.body?.issuer}:${req.body?.subject}`;
-    const linked = digitSubjects.get(key);
-    const requested = req.body?.digitUserUuid;
-    if (linked && requested && linked !== requested) {
-      return res.status(409).json({ error: "already linked" });
-    }
-    if (linked || requested) {
-      digitSubjects.set(key, linked || requested);
-      return res.json({ digitUserUuid: linked || requested, created: false });
-    }
-    if (!req.body?.profile?.name) return res.status(400).json({ error: "profile.name" });
-    const created = `digit-employee-${digitSubjects.size + 1}`;
-    digitSubjects.set(key, created);
-    return res.json({ digitUserUuid: created, created: true });
-  });
-
-  app.post("/internal/identity/v1/subjects/_ensure", requireWorkload, (req, res) => {
-    return res.json({ digitUserUuid: req.body?.digitUserUuid });
-  });
-
-  app.post("/internal/identity/v1/memberships/_reconcile", requireWorkload, (req, res) => {
-    const key = `${req.body?.organizationId}:${req.body?.issuer}:${req.body?.subject}`;
-    digitMemberships.set(key, {
-      issuer: req.body?.issuer,
-      subject: req.body?.subject,
-      organizationId: req.body?.organizationId,
-      active: req.body?.active !== false,
-    });
-    return res.json({ membershipId: "membership-1" });
-  });
-
-  app.post("/internal/identity/v1/reconciliation/_snapshot", requireWorkload, (_req, res) => {
-    return res.json({
-      organizations: [...digitOrganizations.values()].map((organization) => ({
-        ...organization,
-        members: [...digitMemberships.values()].filter(
-          (member) => member.organizationId === organization.organizationId,
-        ),
-      })),
-    });
-  });
-
-  app.post("/internal/identity/v1/sessions/_exchange", (req, res) => {
-    const assertion = req.get("authorization")?.replace(/^Bearer /, "");
-    if (!assertion) return res.status(401).json({ error: "missing assertion" });
-    const payload = JSON.parse(
-      Buffer.from(assertion.split(".")[1], "base64url").toString("utf8"),
-    );
-    const context = req.body?.context;
-    const rolesByTenant: Record<string, string[]> = {
-      "ke.bomet": ["TENANT_ADMIN"],
-      "ke.kisumu": ["VIEWER"],
-    };
-    const roleCodes = rolesByTenant[context?.tenantId];
-    const organization = payload.organization || {};
-    const aliases = Object.keys(organization);
-    const selectedAlias = context?.tenantId === "ke.bomet" ? "bomet" : "kisumu";
-    if (!roleCodes || payload.sub !== "identity-user-1" ||
-        payload.aud !== "digit-identity-exchange" ||
-        aliases.length !== 1 || aliases[0] !== selectedAlias) {
-      return res.status(403).json({ error: "not eligible" });
-    }
-    return res.json({
-      access_token: `digit-token-${context.tenantId}`,
-      refresh_token: "identity-service-secret-that-must-not-reach-the-browser",
-      token_type: "bearer",
-      expires_in: 900,
-      UserRequest: {
-        uuid: "digit-user-1",
-        userName: "person@example.com",
-        name: "Demo Person",
-        emailId: "person@example.com",
-        mobileNumber: "0700000001",
-        tenantId: context.tenantId,
-        type: "EMPLOYEE",
-        roles: roleCodes.map((code) => ({
-          code,
-          name: code,
-          tenantId: context.tenantId,
-        })),
-      },
-    });
-  });
   return app;
 }

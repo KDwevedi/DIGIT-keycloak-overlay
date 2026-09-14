@@ -3,7 +3,6 @@ import { config } from "./config.js";
 import {
   authorizationUrl,
   exchangeAuthorizationCode,
-  exchangeIdentityAssertion,
   logoutFromKeycloak,
   refreshIdentityTokens,
   verifyIdentityAccessToken,
@@ -25,15 +24,23 @@ import {
   sessionCookie,
   sessionIdFromCookie,
 } from "./identity-session.js";
+import { DigitUnavailableError } from "./digit-user-service.js";
 import {
-  DigitIdentityUnavailableError,
-  issueDigitContext,
-  resolveActiveTenantOptions,
-} from "./digit-identity.js";
-import type { TenantOption } from "./tenant-options.js";
-import type { IdentitySession } from "./types.js";
+  desiredRoles,
+  membershipsFromClaims,
+  tenantOptions,
+  type TenantOption,
+} from "./identity-tenants.js";
+import {
+  ensureManagedAccount,
+  ManagedAccountError,
+  managedIdentity,
+  managedUserLogin,
+  revokeManagedUserLogin,
+} from "./managed-digit-users.js";
+import type { IdentitySession, KCClaims } from "./types.js";
 import { enabledIdentityMethods } from "./identity-methods.js";
-import { IdentityAdminError } from "./identity-admin.js";
+import { IdentityAdminError, isOrganizationMember } from "./identity-admin.js";
 
 function asyncRoute(
   handler: (req: express.Request, res: express.Response) => Promise<unknown>,
@@ -45,6 +52,33 @@ function asyncRoute(
 
 function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOption) {
   return tenant;
+}
+
+/**
+ * Resolves the managed DIGIT account for the signed-in identity, creating it
+ * when absent and projecting the signed Organization roles, then returns the
+ * tenants present in both Keycloak membership and DIGIT grants.
+ */
+async function resolveTenantContexts(claims: KCClaims): Promise<TenantOption[]> {
+  const memberships = await membershipsFromClaims(claims);
+  const identity = managedIdentity(config.keycloakIssuer, claims.sub);
+  const { account } = await ensureManagedAccount(identity, desiredRoles(memberships), {
+    name: claims.name || claims.preferred_username || "",
+    emailId: claims.email_verified ? claims.email : undefined,
+    mobileNumber: claims.phone_number,
+  });
+  return tenantOptions(memberships, account);
+}
+
+function digitFailure(error: unknown, res: express.Response, message: string) {
+  if (error instanceof ManagedAccountError) {
+    return res.status(error.status).json({ error: error.message });
+  }
+  if (error instanceof DigitUnavailableError) {
+    console.warn(`${message}:`, error.message);
+    return res.status(503).json({ error: message });
+  }
+  throw error;
 }
 
 function trustedWriteOrigin(req: express.Request): boolean {
@@ -155,6 +189,9 @@ export function registerIdentityRoutes(app: express.Application): void {
         throw new Error("Keycloak token subjects do not match");
       }
       const { sessionId, maxAge } = await createIdentitySession(tokens, claims);
+      await resolveTenantContexts(claims).catch((error) => {
+        console.warn("DIGIT account resolution after sign-in failed:", (error as Error).message);
+      });
       res.setHeader("Set-Cookie", [
         sessionCookie(sessionId, maxAge),
         clearedLoginCookie(),
@@ -183,29 +220,27 @@ export function registerIdentityRoutes(app: express.Application): void {
       context: context ? {
         tenantId: context.tenantId,
         name: context.name,
+        organizationAlias: context.organizationAlias,
       } : null,
       expiresAt: current.session.accessExpiresAt,
     });
   }));
 
   app.get("/identity/v1/tenants", asyncRoute(async (req, res) => {
+    // Resolves (and when absent creates) the managed DIGIT account.
     const current = await currentSession(req.headers.cookie);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
     try {
-      const tenants = await resolveActiveTenantOptions(current.session.claims);
+      const tenants = await resolveTenantContexts(current.session.claims);
       return res.json({
         tenants: tenants.map(publicTenant),
         selectionRequired: tenants.length > 1,
         onboardingRequired: tenants.length === 0,
       });
     } catch (error) {
-      if (error instanceof DigitIdentityUnavailableError) {
-        console.warn("Tenant context resolution failed:", error.message);
-        return res.status(503).json({ error: "Tenant options are temporarily unavailable" });
-      }
-      throw error;
+      return digitFailure(error, res, "Tenant options are temporarily unavailable");
     }
   }));
 
@@ -223,16 +258,18 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (!tenantId) return res.status(400).json({ error: "tenantId is required" });
 
     try {
-      const tenants = await resolveActiveTenantOptions(current.session.claims);
+      const tenants = await resolveTenantContexts(current.session.claims);
       const selected = tenants.find((tenant) => tenant.tenantId === tenantId);
       if (!selected) {
         return res.status(403).json({ error: "Tenant context is not available" });
       }
-      const assertion = await exchangeIdentityAssertion(
-        current.session.accessToken,
-        selected.organizationAlias,
-      );
-      const digitSession = await issueDigitContext(assertion, selected);
+      // Session claims can be up to one access-token lifetime old; confirm the
+      // membership is still live in Keycloak before issuing DIGIT credentials.
+      const subject = current.session.claims.sub;
+      if (!await isOrganizationMember(selected.organizationId, subject)) {
+        return res.status(403).json({ error: "Tenant context is not available" });
+      }
+      const login = await managedUserLogin(managedIdentity(config.keycloakIssuer, subject));
       const saved = await saveSelectedIdentityContext(current.sessionId, {
         organizationId: selected.organizationId,
         organizationAlias: selected.organizationAlias,
@@ -242,13 +279,18 @@ export function registerIdentityRoutes(app: express.Application): void {
       if (!saved) {
         return res.status(401).json({ error: "Identity session expired" });
       }
-      return res.json(digitSession);
+      // The normal egov-user login response, minus its refresh token, so existing
+      // frontends keep sending RequestInfo.authToken unchanged. Keycloak tokens
+      // and the admin token never leave the BFF.
+      return res.json({
+        access_token: login.accessToken,
+        token_type: "bearer",
+        expires_in: Math.max(1, Math.floor((login.expiresAt - Date.now()) / 1000)),
+        scope: "read",
+        UserRequest: login.user,
+      });
     } catch (error) {
-      if (error instanceof DigitIdentityUnavailableError) {
-        console.warn("DIGIT context issuance failed:", error.message);
-        return res.status(503).json({ error: "Sign-in context is temporarily unavailable" });
-      }
-      throw error;
+      return digitFailure(error, res, "Sign-in context is temporarily unavailable");
     }
   }));
 
@@ -260,6 +302,13 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (sessionId) {
       const session = await getIdentitySession(sessionId);
       await deleteIdentitySession(sessionId);
+      if (session) {
+        // The browser held a copy of the DIGIT token; revoke it with the session.
+        await revokeManagedUserLogin(managedIdentity(config.keycloakIssuer, session.claims.sub))
+          .catch((error) => {
+            console.warn("DIGIT token revocation failed:", (error as Error).message);
+          });
+      }
       await logoutFromKeycloak(session?.refreshToken).catch((error) => {
         console.warn("Keycloak logout failed:", (error as Error).message);
       });

@@ -71,7 +71,7 @@ function getOrCreateRealm(name: string): RealmState {
         ["digit-ui", {
           id: "digit-ui-uuid",
           clientId: "digit-ui",
-          roles: ["TENANT_ADMIN", "VIEWER"].map((role) => ({
+          roles: ["TENANT_ADMIN", "VIEWER", "GRO", "PGR_VIEWER"].map((role) => ({
             id: `${role.toLowerCase()}-id`,
             name: role,
           })),
@@ -346,7 +346,7 @@ export function createKcAdminMock() {
     if (Array.from(realm.organizations.values()).some(
       (organization) => organization.alias === req.body.alias,
     )) return res.status(409).json({ error: "duplicate alias" });
-    const id = crypto.randomUUID();
+    const id = typeof req.body.id === "string" ? req.body.id : crypto.randomUUID();
     realm.organizations.set(id, {
       id,
       name: req.body.name,
@@ -385,6 +385,22 @@ export function createKcAdminMock() {
     if (organization.members.has(req.body)) return res.status(409).end();
     organization.members.add(req.body);
     res.status(201).end();
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId/members/:memberId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization?.members.has(req.params.memberId)) {
+      return res.status(404).json({ error: "not a member" });
+    }
+    res.json({ id: req.params.memberId });
+  });
+
+  app.delete("/admin/realms/:realm/organizations/:organizationId/members/:memberId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization?.members.delete(req.params.memberId)) return res.status(404).end();
+    res.status(204).end();
   });
 
   app.get("/admin/realms/:realm/organizations/:organizationId/members", (req, res) => {

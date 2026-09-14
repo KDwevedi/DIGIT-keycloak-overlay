@@ -1,13 +1,32 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config } from "../../src/config.js";
 import { getIssuer } from "../helpers.js";
+import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
 import {
   getIdentityAppPort as getAppPort,
   startIdentityTestApp as startTestApp,
   stopIdentityTestApp as stopTestApp,
 } from "./identity-test-app.js";
 
+const digit = createFakeDigitUser({
+  tenants: ["ke", "ke.bomet", "ke.kisumu", "ke.nakuru", "ke.nyeri"],
+});
+
+async function kcAdmin(path: string, body: unknown): Promise<Response> {
+  return fetch(`${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 beforeAll(async () => {
+  const digitBase = await digit.start();
+  digit.addAccount({
+    userName: "BFF-ADMIN", name: "BFF admin", mobileNumber: "0700000000", emailId: null,
+    tenantId: "ke", type: "EMPLOYEE", active: true, identificationMark: null,
+    roles: [{ code: "ACCOUNT_ADMIN", tenantId: "ke" }], password: "Adm1n@Secret",
+  });
   (config as any).keycloakIssuer = getIssuer();
   (config as any).keycloakBffClientId = "digit-identity-bff";
   (config as any).keycloakBffClientSecret = "test-bff-secret";
@@ -21,42 +40,50 @@ beforeAll(async () => {
     { id: "password", label: "Password", type: "password" },
     { id: "google", label: "Google", type: "oauth", idpHint: "google" },
   ];
-  (config as any).digitIdentityServiceUrl =
-    "http://localhost:9999/internal/identity/v1";
-  (config as any).digitIdentityServiceToken = "test-identity-workload";
-  (config as any).digitIdentityAssertionAudience = "digit-identity-exchange";
-  (config as any).digitAccessTokenMaxTtlSeconds = 900;
+  Object.assign(config as any, {
+    cachePrefix: `identity-e2e-${process.pid}`,
+    digitUserServiceUrl: `${digitBase}/user`,
+    digitMdmsSearchUrl: `${digitBase}/mdms-v2/v1/_search`,
+    digitAdminUsername: "BFF-ADMIN",
+    digitAdminPassword: "Adm1n@Secret",
+    digitAdminTenantId: "ke",
+    digitManagedUserTenantId: "ke",
+    digitManagedBaseRoles: ["EMPLOYEE"],
+    digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
+    digitRoleClientId: "digit-ui",
+  });
   (config as any).identityControlPlaneToken = "test-control-plane";
   (config as any).identitySessionIntrospectionToken = "test-session-introspection";
   (config as any).identityReconciliationLeaseSeconds = 30;
   (config as any).keycloakOrganizationRealm = "digit-sandbox";
   (config as any).keycloakAllowedOrganizationRoleClients = ["digit-ui"];
-  (config as any).organizationTenantMappings = [
-    {
-      organizationId: "org-bomet-id",
-      tenantId: "ke.bomet",
-      name: "Bomet County",
-    },
-    {
-      organizationId: "org-kisumu-id",
-      tenantId: "ke.kisumu",
-      name: "Kisumu County",
-    },
-  ];
   await startTestApp();
+  for (const [id, alias, tenantId, name] of [
+    ["org-bomet-id", "bomet", "ke.bomet", "Bomet County"],
+    ["org-kisumu-id", "kisumu", "ke.kisumu", "Kisumu County"],
+  ]) {
+    await kcAdmin("/organizations", {
+      id, alias, name, enabled: true, attributes: { "digit.rootTenantId": [tenantId] },
+    });
+    await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/organizations/${id}/members`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify("identity-user-1") },
+    );
+  }
 });
 
 afterAll(async () => {
   await stopTestApp();
+  await digit.stop();
 });
 
 describe("identity BFF", () => {
-  it("owns idempotent Keycloak Organization provisioning for callers such as PGR", async () => {
+  it("provisions Organizations and BFF-managed DIGIT accounts through the control plane", async () => {
     const base = `http://localhost:${getAppPort()}/internal/identity/v1`;
     const unauthorized = await fetch(`${base}/organizations/_ensure`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenantId: "ke.bomet", alias: "bomet", name: "Bomet" }),
+      body: JSON.stringify({ tenantId: "ke.nakuru", alias: "nakuru", name: "Nakuru" }),
     });
     expect(unauthorized.status).toBe(401);
 
@@ -64,134 +91,68 @@ describe("identity BFF", () => {
       Authorization: "Bearer test-control-plane",
       "Content-Type": "application/json",
     };
-    const ensureOrganization = () => fetch(`${base}/organizations/_ensure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        tenantId: "ke.bomet",
-        alias: "bomet",
-        name: "Bomet County",
-      }),
+    const post = (path: string, body: unknown) => fetch(`${base}${path}`, {
+      method: "POST", headers, body: JSON.stringify(body),
     });
-    const first = await ensureOrganization();
-    expect(first.status).toBe(200);
-    const organization = (await first.json()).organization;
-    const repeated = await ensureOrganization();
-    expect(repeated.status).toBe(200);
-    expect((await repeated.json()).organization.id).toBe(organization.id);
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const membership = await fetch(`${base}/memberships/_ensure`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          organizationId: organization.id,
-          userId: "identity-user-1",
-          digitUserUuid: "digit-user-1",
-        }),
-      });
-      expect(membership.status).toBe(200);
-      expect(await membership.json()).toEqual({
-        digitUserUuid: "digit-user-1",
-        created: false,
-      });
-    }
-
-    const ensureRoles = () => fetch(`${base}/role-assignments/_ensure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        organizationId: organization.id,
-        userId: "identity-user-1",
-        groupName: "tenant-admins",
-        clientId: "digit-ui",
-        roles: ["TENANT_ADMIN"],
-      }),
-    });
-    const roles = await ensureRoles();
-    expect(roles.status).toBe(200);
-    expect(await roles.json()).toMatchObject({
-      assignment: { roles: ["TENANT_ADMIN"] },
-    });
-    expect((await (await ensureRoles()).json()).assignment.roles).toEqual([
-      "TENANT_ADMIN",
-    ]);
-
-    const reconciliation = await fetch(`${base}/reconciliation/_run`, {
-      method: "POST",
-      headers,
-    });
-    expect(reconciliation.status).toBe(200);
-    expect(await reconciliation.json()).toMatchObject({
-      acquired: true,
-      organizations: 1,
-      activated: 1,
-      failures: [],
-    });
-  });
-
-  it("provisions a new founder once and keeps that DIGIT user across Organizations", async () => {
-    const base = `http://localhost:${getAppPort()}/internal/identity/v1`;
-    const headers = {
-      Authorization: "Bearer test-control-plane",
-      "Content-Type": "application/json",
-    };
-    const created = await fetch(
-      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/users`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "founder@example.org",
-          email: "founder@example.org",
-          firstName: "New",
-          lastName: "Founder",
-          emailVerified: true,
-        }),
-      },
-    );
-    expect(created.status).toBe(201);
-    const founderId = created.headers.get("location")!.split("/").pop()!;
+    expect((await post("/organizations/_ensure", {
+      tenantId: "ke.missing", alias: "missing", name: "Missing",
+    })).status).toBe(409);
 
     const ensureOrganization = async (tenantId: string, alias: string) => {
-      const response = await fetch(`${base}/organizations/_ensure`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ tenantId, alias, name: alias }),
-      });
+      const response = await post("/organizations/_ensure", { tenantId, alias, name: alias });
       expect(response.status).toBe(200);
       return (await response.json()).organization.id as string;
     };
-    const ensureMembership = async (organizationId: string) => {
-      const response = await fetch(`${base}/memberships/_ensure`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ organizationId, userId: founderId }),
-      });
-      expect(response.status).toBe(200);
-      return response.json();
-    };
+    const nakuru = await ensureOrganization("ke.nakuru", "nakuru");
+    expect(await ensureOrganization("ke.nakuru", "nakuru")).toBe(nakuru);
 
-    const firstOrganization = await ensureOrganization("founder.one", "founder-one");
-    const first = await ensureMembership(firstOrganization);
-    expect(first).toMatchObject({ created: true });
-    expect(await ensureMembership(firstOrganization)).toEqual({
-      digitUserUuid: first.digitUserUuid,
-      created: false,
+    const created = await kcAdmin("/users", {
+      username: "founder@example.org", email: "founder@example.org",
+      firstName: "New", lastName: "Founder", emailVerified: true,
+    });
+    const founderId = created.headers.get("location")!.split("/").pop()!;
+
+    expect((await post("/memberships/_ensure", {
+      organizationId: nakuru, userId: founderId, digitUserUuid: "legacy-employee",
+    })).status).toBe(400);
+    expect((await post("/memberships/_ensure", { organizationId: nakuru, userId: founderId })).status)
+      .toBe(409);
+
+    const first = await post("/memberships/_ensure", {
+      organizationId: nakuru, userId: founderId, mobileNumber: "0712345678",
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody).toMatchObject({ created: true });
+    const repeat = await post("/memberships/_ensure", { organizationId: nakuru, userId: founderId });
+    expect(await repeat.json()).toEqual({ digitUserUuid: firstBody.digitUserUuid, created: false });
+
+    const roles = await post("/role-assignments/_ensure", {
+      organizationId: nakuru, userId: founderId, groupName: "officers", clientId: "digit-ui", roles: ["GRO"],
+    });
+    expect(roles.status).toBe(200);
+    expect(await roles.json()).toMatchObject({
+      assignment: { roles: ["GRO"] }, digitUserUuid: firstBody.digitUserUuid,
     });
 
-    const secondOrganization = await ensureOrganization("founder.two", "founder-two");
-    expect(await ensureMembership(secondOrganization)).toEqual({
-      digitUserUuid: first.digitUserUuid,
-      created: false,
-    });
+    const nyeri = await ensureOrganization("ke.nyeri", "nyeri");
+    const second = await post("/memberships/_ensure", { organizationId: nyeri, userId: founderId });
+    expect(await second.json()).toEqual({ digitUserUuid: firstBody.digitUserUuid, created: false });
 
-    const unmapped = await fetch(`${base}/memberships/_ensure`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ organizationId: "missing-org", userId: founderId }),
+    const account = digit.accounts.get(firstBody.digitUserUuid)!;
+    expect(account.userName).toMatch(/^kcbff-/);
+    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:/);
+    expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort()).toEqual([
+      "ke.nakuru:EMPLOYEE", "ke.nakuru:GRO", "ke.nyeri:EMPLOYEE",
+    ]);
+    expect(digit.accounts.size).toBe(2);
+
+    const reconciliation = await post("/reconciliation/_run", {});
+    expect(reconciliation.status).toBe(200);
+    expect(await reconciliation.json()).toMatchObject({
+      acquired: true, organizations: 4, unchanged: 1, unprovisioned: 1, failures: [],
     });
-    expect(unmapped.status).toBe(502);
   });
 
   it("exposes configured methods and rejects unknown methods", async () => {
@@ -326,13 +287,13 @@ describe("identity BFF", () => {
           tenantId: "ke.bomet",
           name: "Bomet County",
           organizationAlias: "bomet",
-          roles: ["TENANT_ADMIN"],
+          roles: ["EMPLOYEE", "GRO"],
         },
         {
           tenantId: "ke.kisumu",
           name: "Kisumu County",
           organizationAlias: "kisumu",
-          roles: ["VIEWER"],
+          roles: ["EMPLOYEE", "PGR_VIEWER"],
         },
       ],
       selectionRequired: true,
@@ -377,26 +338,45 @@ describe("identity BFF", () => {
     );
     expect(selected.status).toBe(200);
     const selectedBody = await selected.json();
+    const managed = [...digit.accounts.values()].find((candidate) =>
+      candidate.userName !== "BFF-ADMIN" && candidate.name === "Demo Person")!;
+    expect(managed.identificationMark).toMatch(/^keycloak-bff:v1:/);
+    expect(digit.tokens.get(selectedBody.access_token)?.uuid).toBe(managed.uuid);
+    expect(Object.keys(selectedBody).sort()).toEqual(
+      ["UserRequest", "access_token", "expires_in", "scope", "token_type"],
+    );
     expect(selectedBody).toMatchObject({
-      access_token: "digit-token-ke.bomet",
       token_type: "bearer",
-      expires_in: 900,
-      UserRequest: {
-        uuid: "digit-user-1",
-        tenantId: "ke.bomet",
-        type: "EMPLOYEE",
-        roles: [{ code: "TENANT_ADMIN", tenantId: "ke.bomet" }],
-      },
+      UserRequest: { uuid: managed.uuid, userName: managed.userName, type: "EMPLOYEE" },
     });
+    expect(JSON.stringify(selectedBody)).not.toMatch(/eyJ[A-Za-z0-9_-]+\./);
+    expect(selectedBody.expires_in).toBeGreaterThan(0);
     expect(JSON.stringify(selectedBody)).not.toContain("refresh_token");
+    expect(JSON.stringify(selectedBody)).not.toContain("must-not-leak");
+    expect(digit.stats.passwordUpdates).toBe(0);
 
     const selectedSession = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/session`,
       { headers: { Cookie: cookie } },
     );
     expect(await selectedSession.json()).toMatchObject({
-      context: { tenantId: "ke.bomet", name: "Bomet County" },
+      context: { tenantId: "ke.bomet", name: "Bomet County", organizationAlias: "bomet" },
     });
+
+    // Membership is rechecked live in Keycloak, not only from session claims.
+    await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/organizations/org-kisumu-id/members/identity-user-1`,
+      { method: "DELETE" },
+    );
+    const revoked = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/contexts/_select`,
+      {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: "ke.kisumu" }),
+      },
+    );
+    expect(revoked.status).toBe(403);
 
     // Re-selecting the same tenant is the renewal operation.
     const renewed = await fetch(
@@ -408,6 +388,7 @@ describe("identity BFF", () => {
       },
     );
     expect(renewed.status).toBe(200);
+    expect((await renewed.json()).access_token).toBe(selectedBody.access_token);
 
     const logout = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/logout`,
@@ -415,6 +396,7 @@ describe("identity BFF", () => {
     );
     expect(logout.status).toBe(204);
     expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(digit.tokens.has(selectedBody.access_token)).toBe(false);
 
     const afterLogout = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/session`,

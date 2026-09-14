@@ -1,39 +1,10 @@
-import type {
-  IdentityAuthMethod,
-  OrganizationTenantMapping,
-} from "./types.js";
+import type { IdentityAuthMethod } from "./types.js";
 
 const keycloakBffClientId =
   process.env.KEYCLOAK_BFF_CLIENT_ID || "digit-identity-bff";
 
-export function parseOrganizationTenantMappings(
-  raw: string,
-): OrganizationTenantMapping[] {
-  if (!raw.trim()) return [];
-
-  const value: unknown = JSON.parse(raw);
-  if (!Array.isArray(value)) {
-    throw new Error("KEYCLOAK_ORG_TENANT_MAPPINGS must be a JSON array");
-  }
-
-  return value.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error(`KEYCLOAK_ORG_TENANT_MAPPINGS[${index}] must be an object`);
-    }
-    const candidate = entry as Record<string, unknown>;
-    for (const field of ["organizationId", "tenantId", "name"] as const) {
-      if (typeof candidate[field] !== "string" || !candidate[field].trim()) {
-        throw new Error(
-          `KEYCLOAK_ORG_TENANT_MAPPINGS[${index}].${field} must be a non-empty string`,
-        );
-      }
-    }
-    return {
-      organizationId: (candidate.organizationId as string).trim(),
-      tenantId: (candidate.tenantId as string).trim(),
-      name: (candidate.name as string).trim(),
-    };
-  });
+function csv(value: string): string[] {
+  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
 }
 
 export function parseIdentityAuthMethods(raw: string): IdentityAuthMethod[] {
@@ -107,9 +78,6 @@ export const config = {
     process.env.KEYCLOAK_BFF_CLIENT_SECRET || "dev-only-change-me",
   keycloakBffAudience:
     process.env.KEYCLOAK_BFF_AUDIENCE || keycloakBffClientId,
-  organizationTenantMappings: parseOrganizationTenantMappings(
-    process.env.KEYCLOAK_ORG_TENANT_MAPPINGS || "",
-  ),
 
   // Identity BFF
   identityRedirectUri:
@@ -147,22 +115,32 @@ export const config = {
     process.env.IDENTITY_RECONCILIATION_INTERVAL_SECONDS || "0",
   ),
 
-  // Durable DIGIT identity/membership/session API. This is deliberately not
-  // a PGR URL: PGR is a control-plane caller, never an identity dependency.
-  digitIdentityServiceUrl:
-    process.env.DIGIT_IDENTITY_SERVICE_URL || "",
-  digitIdentityServiceToken:
-    process.env.DIGIT_IDENTITY_SERVICE_TOKEN || "",
-  digitIdentityClientId:
-    process.env.DIGIT_IDENTITY_CLIENT_ID || "digit-ui",
-  digitIdentityAssertionAudience:
-    process.env.DIGIT_IDENTITY_ASSERTION_AUDIENCE || "digit-identity-exchange",
-  digitIdentityTimeoutMs: parseInt(
-    process.env.DIGIT_IDENTITY_TIMEOUT_MS || "5000",
+  // Existing DIGIT user-service contract. The BFF owns only the accounts it
+  // created (see managed-digit-users.ts); the admin credential is used solely
+  // for those accounts' lifecycle, never for business calls.
+  digitUserServiceUrl: process.env.DIGIT_USER_SERVICE_URL || "",
+  digitMdmsSearchUrl: process.env.DIGIT_MDMS_SEARCH_URL || "",
+  digitOauthClientAuthorization:
+    process.env.DIGIT_OAUTH_CLIENT_AUTHORIZATION || "Basic ZWdvdi11c2VyLWNsaWVudDo=",
+  digitAdminUsername: process.env.DIGIT_ADMIN_USERNAME || "",
+  digitAdminPassword: process.env.DIGIT_ADMIN_PASSWORD || "",
+  digitAdminTenantId: process.env.DIGIT_ADMIN_TENANT_ID || "",
+  digitAdminUserType: process.env.DIGIT_ADMIN_USER_TYPE || "EMPLOYEE",
+  digitManagedUserTenantId: process.env.DIGIT_MANAGED_USER_TENANT_ID || "",
+  digitManagedBaseRoles: csv(process.env.DIGIT_MANAGED_BASE_ROLES || "EMPLOYEE"),
+  digitManagedRoleAllowlist: csv(
+    process.env.DIGIT_MANAGED_ROLE_ALLOWLIST ||
+      "EMPLOYEE,GRO,PGR_LME,DGRO,CSR,SUPERVISOR,AUTO_ESCALATE,PGR_VIEWER,TICKET_REPORT_VIEWER",
   ),
-  digitAccessTokenMaxTtlSeconds: parseInt(
-    process.env.DIGIT_ACCESS_TOKEN_MAX_TTL_SECONDS || "900",
+  digitRoleClientId:
+    process.env.DIGIT_ROLE_CLIENT_ID || process.env.DIGIT_IDENTITY_CLIENT_ID || "digit-ui",
+  digitTimeoutMs: parseInt(process.env.DIGIT_TIMEOUT_MS || "10000"),
+  digitTokenRefreshSkewSeconds: parseInt(
+    process.env.DIGIT_TOKEN_REFRESH_SKEW_SECONDS || "60",
   ),
+  digitUserLeaseSeconds: parseInt(process.env.DIGIT_USER_LEASE_SECONDS || "30"),
+  digitUserLeaseWaitMs: parseInt(process.env.DIGIT_USER_LEASE_WAIT_MS || "15000"),
+  digitPasswordLength: parseInt(process.env.DIGIT_PASSWORD_LENGTH || "15"),
   keycloakOrganizationRealm:
     process.env.KEYCLOAK_ORGANIZATION_REALM || keycloakIssuerRealm(),
   keycloakAllowedOrganizationRoleClients: (

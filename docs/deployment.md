@@ -8,7 +8,7 @@ migration. The v1 BFF contract is documented in [identity-bff.md](identity-bff.m
 
 ```text
 Browser -> /identity/v1/* -> identity-bff -> Keycloak OIDC
-                                      \----> durable DIGIT identity API
+                                      \----> existing egov-user API
 
 Onboarding/reconciler -> /internal/identity/v1/* -> identity-bff
                                                       \-> Keycloak Admin API
@@ -61,7 +61,7 @@ Key environment variables:
 
 Run the same image with `npm run start:identity` (or
 `node dist/identity-server.js`). This executable initializes only OIDC/JWKS,
-Redis sessions, the durable identity client, and the Keycloak control plane. It
+Redis sessions, the egov-user managed-account client, and the Keycloak control plane. It
 does not initialize a DIGIT system token, proxy routes, tenant-realm sync, or
 PGR.
 
@@ -76,8 +76,9 @@ Key environment variables:
 | `IDENTITY_AUTH_METHODS` | Sign-in methods displayed by the frontend |
 | `IDENTITY_REDIRECT_URI` | Exact Keycloak callback URI |
 | `IDENTITY_ALLOWED_ORIGIN` | Exact browser origin allowed to use the cookie |
-| `DIGIT_IDENTITY_SERVICE_URL` | Durable identity/membership/session API; never a PGR URL |
-| `DIGIT_IDENTITY_SERVICE_TOKEN` | Workload credential for that durable identity API |
+| `DIGIT_USER_SERVICE_URL` / `DIGIT_MDMS_SEARCH_URL` | Existing egov-user and MDMS search endpoints (through Kong) |
+| `DIGIT_ADMIN_USERNAME` / `DIGIT_ADMIN_PASSWORD` / `DIGIT_ADMIN_TENANT_ID` | Dedicated `ACCOUNT_ADMIN` employee for managed-account lifecycle only |
+| `DIGIT_MANAGED_USER_TENANT_ID` / `DIGIT_MANAGED_ROLE_ALLOWLIST` | Home tenant and projectable roles of BFF-managed accounts |
 | `IDENTITY_CONTROL_PLANE_TOKEN` | Workload credential required by provisioning routes |
 | `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` | Comma-separated clients whose Organization-group roles may be managed |
 | `KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` | Dedicated Keycloak Admin service account |

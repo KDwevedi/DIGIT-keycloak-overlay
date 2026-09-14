@@ -7,15 +7,20 @@ import {
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
   readIdentityUserProfile,
+  readOrganizationMapping,
 } from "./identity-admin.js";
 import { currentSession } from "./identity-routes.js";
+import { DigitUnavailableError } from "./digit-user-service.js";
 import {
-  DigitIdentityUnavailableError,
-  ensureDigitEmployee,
-  ensureDigitOrganization,
-  reconcileDigitMembership,
-} from "./digit-identity.js";
-import { runIdentityReconciliation } from "./identity-reconciliation.js";
+  desiredRolesBySubject,
+  runIdentityReconciliation,
+} from "./identity-reconciliation.js";
+import { clearTenantCaches, isActiveDigitTenant } from "./identity-tenants.js";
+import {
+  ensureManagedAccount,
+  ManagedAccountError,
+  managedIdentity,
+} from "./managed-digit-users.js";
 
 function asyncRoute(
   handler: (req: express.Request, res: express.Response) => Promise<unknown>,
@@ -42,10 +47,22 @@ function optionalString(value: unknown, name: string): string | undefined {
 }
 
 function handleAdminError(error: unknown, res: express.Response) {
-  if (error instanceof IdentityAdminError) {
+  if (error instanceof IdentityAdminError || error instanceof ManagedAccountError) {
     return res.status(error.status).json({ error: error.message });
   }
+  if (error instanceof DigitUnavailableError) {
+    return res.status(error.status === 409 ? 409 : 502).json({ error: error.message });
+  }
   throw error;
+}
+
+/** Re-derives the subject's desired DIGIT roles from Keycloak and applies them. */
+async function syncSubject(userId: string, mobileNumber?: string) {
+  const desired = (await desiredRolesBySubject()).bySubject.get(userId) || new Map();
+  const profile = mobileNumber === undefined
+    ? undefined
+    : { ...await readIdentityUserProfile(userId), mobileNumber };
+  return ensureManagedAccount(managedIdentity(config.keycloakIssuer, userId), desired, profile);
 }
 
 export function registerIdentityControlRoutes(app: express.Application): void {
@@ -76,13 +93,12 @@ export function registerIdentityControlRoutes(app: express.Application): void {
       if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(alias)) {
         throw new IdentityAdminError("alias is invalid", 400);
       }
+      clearTenantCaches();
+      if (!await isActiveDigitTenant(tenantId)) {
+        throw new IdentityAdminError("The DIGIT tenant foundation does not exist yet", 409);
+      }
       const organization = await ensureOrganization({ tenantId, alias, name });
-      await ensureDigitOrganization({
-        organizationId: organization.id,
-        alias,
-        tenantId,
-        name,
-      });
+      clearTenantCaches();
       return res.json({ organization });
     } catch (error) {
       return handleAdminError(error, res);
@@ -107,34 +123,28 @@ export function registerIdentityControlRoutes(app: express.Application): void {
     });
   }));
 
-  // Links the Keycloak user to its DIGIT employee, then records Organization
-  // membership. Without digitUserUuid, egov-user returns the subject's existing
-  // employee or provisions one without a local password. Call this only after
-  // the tenant foundation and Organization mapping exist; roles follow through
-  // role-assignments/_ensure.
+  // Adds Keycloak Organization membership, then resolves the member's managed
+  // DIGIT account: created when absent (requires mobileNumber) and given the
+  // Organization tenant's base and allowlisted group roles. Existing
+  // locally managed DIGIT employees are never linked or modified.
   app.post("/internal/identity/v1/memberships/_ensure", asyncRoute(async (req, res) => {
     try {
       const organizationId = requiredString(req.body?.organizationId, "organizationId");
       const userId = requiredString(req.body?.userId, "userId");
-      const digitUserUuid = optionalString(req.body?.digitUserUuid, "digitUserUuid");
-      const mobileNumber = optionalString(req.body?.mobileNumber, "mobileNumber");
-      const profile = digitUserUuid ? undefined : {
-        ...await readIdentityUserProfile(userId),
-        ...(mobileNumber && { mobileNumber }),
-      };
-      const employee = await ensureDigitEmployee({
-        issuer: config.keycloakIssuer,
-        subject: userId,
-        organizationId,
-        ...(digitUserUuid && { digitUserUuid }),
-        ...(profile && { profile }),
-      });
-      await ensureOrganizationMembership({ organizationId, userId });
-      return res.json(employee);
-    } catch (error) {
-      if (error instanceof DigitIdentityUnavailableError) {
-        return res.status(502).json({ error: error.message });
+      if (req.body?.digitUserUuid !== undefined) {
+        throw new IdentityAdminError(
+          "digitUserUuid is not supported: only BFF-managed DIGIT accounts are linked",
+          400,
+        );
       }
+      const mobileNumber = optionalString(req.body?.mobileNumber, "mobileNumber") || "";
+      if (!await readOrganizationMapping(organizationId)) {
+        throw new IdentityAdminError("Organization is not mapped to a DIGIT tenant", 404);
+      }
+      await ensureOrganizationMembership({ organizationId, userId });
+      const outcome = await syncSubject(userId, mobileNumber);
+      return res.json({ digitUserUuid: outcome.account?.uuid, created: outcome.created });
+    } catch (error) {
       return handleAdminError(error, res);
     }
   }));
@@ -159,13 +169,8 @@ export function registerIdentityControlRoutes(app: express.Application): void {
         clientId,
         roles,
       });
-      await reconcileDigitMembership({
-        issuer: config.keycloakIssuer,
-        subject: userId,
-        organizationId,
-        roles,
-      });
-      return res.json({ assignment });
+      const outcome = await syncSubject(userId);
+      return res.json({ assignment, digitUserUuid: outcome.account?.uuid ?? null });
     } catch (error) {
       return handleAdminError(error, res);
     }

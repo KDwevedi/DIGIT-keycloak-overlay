@@ -1,10 +1,10 @@
-# Overlay for a DIGIT local-setup Compose project (egov-network, redis,
-# egov-user, and the opt-in keycloak/keycloak-postgres services). Apply with
+# Overlay for a DIGIT local-setup Compose project (egov-network, redis, and
+# the opt-in keycloak/keycloak-postgres services). egov-user is unchanged: the
+# BFF uses its existing user-service API. Apply with
 # the project's existing -f files plus this one; values come from the
 # operator's environment and 0600 env files, never from this repository.
 #
 #   IDENTITY_BFF_IMAGE    identity BFF image built from this repository
-#   EGOV_USER_IMAGE       egov-user image containing /user/identity/v1
 #   KEYCLOAK_PUBLIC_URL   public Keycloak base, e.g. https://example.org/auth
 #   IDENTITY_ENV_DIR      directory holding the env files below
 services:
@@ -34,10 +34,6 @@ services:
       retries: 10
       start_period: 120s
 
-  egov-user:
-    image: ${EGOV_USER_IMAGE:?set EGOV_USER_IMAGE}
-    env_file:
-      - ${IDENTITY_ENV_DIR:?set IDENTITY_ENV_DIR}/identity-egov-user.env
 
   identity-bff:
     image: ${IDENTITY_BFF_IMAGE:?set IDENTITY_BFF_IMAGE}
@@ -45,7 +41,7 @@ services:
     command: ["node", "dist/identity-server.js"]
     restart: unless-stopped
     env_file:
-      - ${IDENTITY_ENV_DIR}/identity-bff.env
+      - ${IDENTITY_ENV_DIR:?set IDENTITY_ENV_DIR}/identity-bff.env
     depends_on:
       keycloak:
         condition: service_healthy

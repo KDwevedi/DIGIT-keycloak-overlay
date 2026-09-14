@@ -2,7 +2,8 @@
 
 An identity boundary between browsers, DIGIT services, and Keycloak. It owns
 OIDC login, server-side Keycloak sessions, Organization-based tenant selection,
-issuance of tenant-scoped DIGIT sessions, and the small Keycloak provisioning
+issuance of the signed-in person's own DIGIT login through existing egov-user
+APIs, and the small Keycloak provisioning
 API used by onboarding or reconciliation workers.
 
 The BFF has **no dependency on PGR**. PGR can call its internal APIs during an
@@ -17,11 +18,11 @@ onboarding saga, but the BFF builds and starts without PGR and never calls PGR.
 ```text
 Browser ── OIDC/session/tenant choice ──> Identity BFF ──> Keycloak
                                               │
-                                              └──> durable DIGIT identity API
+                                              └──> existing egov-user API (via Kong)
 
 PGR or another onboarding worker ── workload auth ──> Identity BFF ──> Keycloak Admin API
 
-Browser ── tenant-scoped DIGIT token ──> Kong ──> PGR and other DIGIT APIs
+Browser ── normal DIGIT RequestInfo.authToken ──> Kong ──> PGR and other DIGIT APIs
 ```
 
 Only the identity BFF talks to Keycloak. Normal application requests do not
@@ -33,17 +34,20 @@ browser.
 ### Organization tenant-list demo
 
 The bundled Keycloak 26.7.3 realm has Organizations enabled. Configure the
-confidential BFF client, its browser origin, and the durable DIGIT identity API:
+confidential BFF client, its browser origin, and the existing DIGIT user service:
 
 ```bash
 export KEYCLOAK_AUDIENCE=digit-ui
 export KEYCLOAK_BFF_CLIENT_SECRET='<same-secret-configured-on-the-bff-client>'
 export IDENTITY_ALLOWED_ORIGIN='http://localhost:3000'
-export DIGIT_IDENTITY_SERVICE_URL='http://digit-identity:8080/internal/identity/v1'
-export DIGIT_IDENTITY_SERVICE_TOKEN='<workload-token>'
-export IDENTITY_CONTROL_PLANE_TOKEN='<different-workload-token>'
+export DIGIT_USER_SERVICE_URL='http://kong:8000/user'
+export DIGIT_MDMS_SEARCH_URL='http://kong:8000/mdms-v2/v1/_search'
+export DIGIT_ADMIN_USERNAME='<dedicated ACCOUNT_ADMIN employee>'
+export DIGIT_ADMIN_PASSWORD='<its password>'
+export DIGIT_ADMIN_TENANT_ID='pg'
+export DIGIT_MANAGED_USER_TENANT_ID='pg'
+export IDENTITY_CONTROL_PLANE_TOKEN='<workload-token>'
 export IDENTITY_SESSION_INTROSPECTION_TOKEN='<pgr-session-only-token>'
-export DIGIT_IDENTITY_ASSERTION_AUDIENCE='digit-identity-exchange'
 export IDENTITY_RECONCILE_ON_STARTUP='true'
 export IDENTITY_RECONCILIATION_INTERVAL_SECONDS='3600'
 ```
@@ -60,10 +64,12 @@ POST /identity/v1/contexts/_select
 POST /identity/v1/logout
 ```
 
-`GET /identity/v1/tenants` returns only the intersection of signed Keycloak
-Organization memberships and active durable DIGIT memberships. Selecting one
-returns a short-lived, tenant-scoped DIGIT login response. The browser then uses
-that DIGIT access token through Kong for PGR and all other normal APIs.
+`GET /identity/v1/tenants` returns only tenants present in both the signed
+Keycloak Organization memberships and the managed DIGIT account's grants.
+Selecting one returns the normal egov-user login response (no refresh token)
+for that person's own BFF-managed DIGIT account, so existing frontends keep
+using `RequestInfo.authToken`. See [docs/identity-bff.md](docs/identity-bff.md)
+for the account lifecycle and its limits.
 
 Internal control-plane API (workload bearer token required):
 
@@ -169,12 +175,11 @@ keycloak/
   cookie, while the BFF manages Keycloak access/refresh token lifetime in Redis
 - **PGR-independent control plane**: idempotent ensure operations can be driven
   by PGR, any other onboarding workflow, or reconciliation
-- **Assertion exchange**: Keycloak Standard Token Exchange narrows the logged-in
-  identity to one Organization and the `digit-identity-exchange` audience before
-  egov-user mints a normal employee DIGIT token
-- **No shadow identity**: control-plane calls link a Keycloak subject to an
-  existing DIGIT employee; they do not fabricate users, passwords, or mobile
-  numbers
+- **Compatibility bridge, not a proxy**: the BFF creates/rotates a marked DIGIT
+  account per Keycloak subject through existing egov-user APIs using an
+  env-configured `ACCOUNT_ADMIN` credential, logs in as that user, and returns
+  the normal DIGIT login response. Legacy locally managed employees are never
+  touched, and the admin token is never used for business calls
 - **Legacy executable retained during migration**: the older generic reverse
   proxy still has its own system-token/lazy-provisioning code and tests, but the
   standalone identity BFF does not use that path

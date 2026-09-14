@@ -12,7 +12,8 @@ readonly IDENTITY_ENV_DIR=${IDENTITY_ENV_DIR:-/opt/digit}
 readonly KEYCLOAK_CONTAINER=${KEYCLOAK_CONTAINER:-keycloak}
 readonly KC_CONFIG=/tmp/identity-bff-kcadm.config
 readonly BFF_CLIENT=digit-identity-bff
-readonly ASSERTION_AUDIENCE=digit-identity-exchange
+# Removed design: Standard Token Exchange to this audience is no longer used.
+readonly RETIRED_ASSERTION_AUDIENCE=digit-identity-exchange
 readonly ADMIN_CLIENT=digit-identity-admin
 readonly ROLE_CLIENT=digit-ui
 
@@ -121,19 +122,18 @@ kc update "clients/$bff_uuid" -r "$REALM" \
   -s "webOrigins=[\"$IDENTITY_ALLOWED_ORIGIN\"]" \
   -s 'attributes."pkce.code.challenge.method"=S256' \
   -s "attributes.\"post.logout.redirect.uris\"=$IDENTITY_ALLOWED_ORIGIN/*" \
-  -s 'attributes."standard.token.exchange.enabled"=true' >/dev/null
+  -s 'attributes."standard.token.exchange.enabled"=false' >/dev/null
 
-if [ -z "$(client_uuid "$ASSERTION_AUDIENCE")" ]; then
-  kc create clients -r "$REALM" -s "clientId=$ASSERTION_AUDIENCE" -s enabled=true \
-    -s bearerOnly=true -s standardFlowEnabled=false \
-    -s directAccessGrantsEnabled=false >/dev/null
+retired_uuid=$(client_uuid "$RETIRED_ASSERTION_AUDIENCE")
+if [ -n "$retired_uuid" ]; then kc delete "clients/$retired_uuid" -r "$REALM" >/dev/null; fi
+retired_mapper=$(kc get "clients/$bff_uuid/protocol-mappers/models" -r "$REALM" |
+  jq -r '.[] | select(.name == "digit-identity-exchange-audience") | .id' | head -1)
+if [ -n "$retired_mapper" ]; then
+  kc delete "clients/$bff_uuid/protocol-mappers/models/$retired_mapper" -r "$REALM" >/dev/null
 fi
 
 ensure_mapper "clients/$bff_uuid" digit-identity-bff-audience oidc-audience-mapper \
   -s "config.\"included.client.audience\"=$BFF_CLIENT" \
-  -s 'config."id.token.claim"=false' -s 'config."access.token.claim"=true'
-ensure_mapper "clients/$bff_uuid" digit-identity-exchange-audience oidc-audience-mapper \
-  -s "config.\"included.client.audience\"=$ASSERTION_AUDIENCE" \
   -s 'config."id.token.claim"=false' -s 'config."access.token.claim"=true'
 
 organization_scope=$(kc get client-scopes -r "$REALM" |

@@ -133,6 +133,49 @@ async function organizationsForTenant(
   return organizations.filter((organization) => mappedTenant(organization) === tenantId);
 }
 
+export interface OrganizationMapping {
+  organizationId: string;
+  alias: string;
+  name: string;
+  tenantId: string;
+}
+
+function asMapping(organization: OrganizationRepresentation): OrganizationMapping | null {
+  const tenantId = mappedTenant(organization);
+  if (!organization.id || !organization.alias || organization.enabled === false || !tenantId) {
+    return null;
+  }
+  return {
+    organizationId: organization.id,
+    alias: organization.alias,
+    name: organization.name || organization.alias,
+    tenantId,
+  };
+}
+
+/** The enabled Organization's DIGIT tenant mapping, or null when absent/disabled/unmapped. */
+export async function readOrganizationMapping(
+  organizationId: string,
+): Promise<OrganizationMapping | null> {
+  try {
+    const response = await request(`/organizations/${encodeURIComponent(organizationId)}`);
+    return asMapping(await response.json() as OrganizationRepresentation);
+  } catch (error) {
+    if (error instanceof IdentityAdminError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function listOrganizationMappings(): Promise<OrganizationMapping[]> {
+  const organizations = await paged<OrganizationRepresentation>(
+    "/organizations?briefRepresentation=false",
+  );
+  return organizations.flatMap((organization) => {
+    const mapping = asMapping(organization);
+    return mapping ? [mapping] : [];
+  });
+}
+
 export async function ensureOrganization(input: {
   tenantId: string;
   alias: string;
@@ -216,6 +259,19 @@ export async function readIdentityUserProfile(userId: string): Promise<IdentityU
     name,
     ...(user.emailVerified === true && user.email ? { emailId: user.email } : {}),
   };
+}
+
+/** Live Keycloak check that the user is still a member of the Organization. */
+export async function isOrganizationMember(organizationId: string, userId: string): Promise<boolean> {
+  try {
+    await request(
+      `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof IdentityAdminError && error.status === 404) return false;
+    throw error;
+  }
 }
 
 export async function ensureOrganizationMembership(input: {
