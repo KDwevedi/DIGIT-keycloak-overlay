@@ -106,11 +106,25 @@ async function ensureTenantFoundation(signup: ClaimedOperation["Signup"]): Promi
       signal: AbortSignal.timeout(config.digitTimeoutMs),
     });
     await response.body?.cancel();
-    if (response.status === 401) throw new DigitUnauthorizedError("DIGIT tenant create was not authorized");
+    if (response.status === 401 || response.status === 403) {
+      throw new DigitUnauthorizedError("DIGIT tenant create was not authorized");
+    }
+    if (!response.ok) {
+      throw new DigitUnavailableError(`DIGIT tenant create returned ${response.status}`);
+    }
     return response.status;
   });
-  clearTenantCaches();
-  if (!await isActiveDigitTenant(tenantId)) {
+
+  // MDMS v2 acknowledges writes before its Kafka-backed read model is updated.
+  // Wait briefly for visibility so a successful create is not reported to PGR
+  // as a retryable failure that the founder then has to submit again.
+  let visible = false;
+  for (let attempt = 0; attempt < 20 && !visible; attempt += 1) {
+    clearTenantCaches();
+    visible = await isActiveDigitTenant(tenantId);
+    if (!visible) await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!visible) {
     throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
       `DIGIT tenant create returned ${status} and the tenant is not visible yet`, true);
   }
