@@ -90,13 +90,14 @@ function trustedWriteOrigin(req: express.Request): boolean {
 
 export async function currentSession(
   cookieHeader?: string,
+  forceRefresh = false,
 ): Promise<{ sessionId: string; session: IdentitySession } | null> {
   const sessionId = sessionIdFromCookie(cookieHeader);
   if (!sessionId) return null;
   let session = await getIdentitySession(sessionId);
   if (!session) return null;
 
-  if (session.accessExpiresAt > Date.now() + 30_000) {
+  if (!forceRefresh && session.accessExpiresAt > Date.now() + 30_000) {
     return { sessionId, session };
   }
   if (!session.refreshToken ||
@@ -229,7 +230,9 @@ export function registerIdentityRoutes(app: express.Application): void {
   }));
 
   app.get("/identity/v1/tenants", asyncRoute(async (req, res) => {
-    const current = await currentSession(req.headers.cookie);
+    // Organization membership may have changed during onboarding. Refresh the
+    // server-side Keycloak token so the same browser session sees it immediately.
+    const current = await currentSession(req.headers.cookie, true);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
@@ -249,7 +252,9 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (!trustedWriteOrigin(req)) {
       return res.status(403).json({ error: "Untrusted request origin" });
     }
-    const current = await currentSession(req.headers.cookie);
+    // Refresh before selection for the same reason as /tenants: a newly
+    // provisioned Organization must not require the user to sign in again.
+    const current = await currentSession(req.headers.cookie, true);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
