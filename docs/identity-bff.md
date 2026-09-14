@@ -67,13 +67,17 @@ through the Keycloak Admin API.
 
 ## Managed DIGIT accounts
 
-The BFF owns one DIGIT `EMPLOYEE` per Keycloak `(issuer, subject)`:
+The BFF owns one DIGIT `EMPLOYEE` per Keycloak `(issuer, subject)` **per tenant**,
+stored at that tenant. DIGIT's gateway (Kong + egov-accesscontrol) authorizes a
+token only against its account's home tenant. On a live stack, a role at
+another tenant is rejected with 403, so one account cannot serve several
+tenants. Each account has:
 
-- username `kcbff-<sha256(issuer\nsubject)[:40]>`;
-- `identificationMark` `keycloak-bff:v1:<sha256(issuer\nsubject)>`;
-- stored at `DIGIT_MANAGED_USER_TENANT_ID`, with roles scoped per mapped tenant:
-  `DIGIT_MANAGED_BASE_ROLES` plus the Organization-group client roles of
-  `DIGIT_ROLE_CLIENT_ID` that are in `DIGIT_MANAGED_ROLE_ALLOWLIST`.
+- username `kcbff-<sha256(issuer\nsubject\ntenant)[:40]>`;
+- `identificationMark` `keycloak-bff:v1:<sha256(issuer\nsubject)>:<tenantId>`;
+- roles at its tenant only: `DIGIT_MANAGED_BASE_ROLES` plus the
+  Organization-group client roles of `DIGIT_ROLE_CLIENT_ID` that are in
+  `DIGIT_MANAGED_ROLE_ALLOWLIST`.
 
 An account is treated as managed only when both username and marker match.
 Locally managed legacy employees, including one that happens to share the
@@ -107,17 +111,26 @@ calls.
   "Discarded" therefore means unreferenced after the single create/update and
   login calls.
 - **Mobile required:** egov-user requires a mobile number to create an employee.
-  Login-time creation uses a `phone_number` claim when present. Otherwise the
-  onboarding worker supplies `mobileNumber` to `memberships/_ensure`. Without
-  one the account is not created and no tenant is offered.
+  Login-time creation uses a `phone_number` claim. The worker uses
+  `tenantMetadata.founder.mobileNumber`. `memberships/_ensure` takes
+  `mobileNumber` and otherwise reuses the mobile on the subject's existing
+  managed account. Without one, that tenant's account is not created and the
+  tenant is not offered.
+- **Separate accounts per tenant:** a person in two Organizations has two DIGIT
+  accounts (different UUIDs) and receives the account matching the selected
+  tenant. Cross-tenant work under one DIGIT identity would need gateway changes.
+- **Per-tenant encryption key:** creating an account at a new tenant needs its
+  egov-enc-service key; the worker ensures it via `DIGIT_ENC_GENERATE_KEY_URL`.
 - **Token lifetime is DIGIT's:** tokens follow `access.token.validity.in.minutes`
   (7 days by default). Rotation does not revoke the previous token; the BFF
   revokes explicitly on logout, role change and deactivation.
-- **One token per account:** logout from one browser revokes the DIGIT token
-  shared with that person's other BFF sessions. Their next selection mints a
-  new one.
+- **One token per account:** logout from one browser revokes the DIGIT tokens
+  shared with that person's other BFF sessions. Their next selection mints new
+  ones. Revocation calls egov-user `/user/_logout` directly
+  (`DIGIT_USER_LOGOUT_URL`), because Kong would evaluate RBAC at the account's
+  home tenant.
 - **Reconciliation index:** former members are found through Redis
-  `digit-managed-subjects`. If that key is lost, a removed member is deactivated
+  `digit-managed-accounts` (`subject|tenant`). If that key is lost, a removed member is deactivated
   only when next seen, and cannot be offered the tenant in the meantime.
 
 ## Control-plane API
@@ -125,7 +138,7 @@ calls.
 Provisioning routes require `IDENTITY_CONTROL_PLANE_TOKEN` and are idempotent:
 
 - `POST /internal/identity/v1/organizations/_ensure` — `{tenantId, alias, name}`; `409` until the DIGIT tenant exists.
-- `POST /internal/identity/v1/memberships/_ensure` — `{organizationId, userId, mobileNumber?}` → `{digitUserUuid, created}`. Adds Keycloak membership, then creates or updates the managed account. `digitUserUuid` input is rejected: legacy employees are not linked.
+- `POST /internal/identity/v1/memberships/_ensure` — `{organizationId, userId, mobileNumber?}` → `{tenantId, digitUserUuid, created}` for that tenant's account. Adds Keycloak membership, then creates or updates the managed account. `digitUserUuid` input is rejected: legacy employees are not linked.
 - `POST /internal/identity/v1/role-assignments/_ensure` — sets an Organization group's allowlisted client roles and projects them to DIGIT.
 - `POST /internal/identity/v1/reconciliation/_run`
 
@@ -154,13 +167,16 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
 2. runs idempotent steps, recording each in `completedSteps`:
    - `TENANT_FOUNDATION`: creates the `tenant.tenants` MDMS record for
      `requestedTenantId`, using a separate `DIGIT_PROVISIONER_*` credential (an
-     `MDMS_ADMIN` employee, `DIGIT_MDMS_CREATE_URL`). Without that credential the
-     tenant must already exist;
+     `MDMS_ADMIN` employee, `DIGIT_MDMS_CREATE_URL`), waits for MDMS v2 read-model
+     visibility, and ensures the tenant's encryption key
+     (`DIGIT_ENC_GENERATE_KEY_URL`, idempotent). Without the provisioner
+     credential the tenant must already exist;
    - `ORGANIZATION`: Keycloak Organization `organizationAlias` mapped to the tenant;
    - `FOUNDER_MEMBERSHIP`: adds the signup owner to it;
    - `FOUNDER_ROLES`: `ONBOARDING_FOUNDER_GROUP` with `ONBOARDING_FOUNDER_ROLES`;
-   - `DIGIT_ACCOUNT`: the founder's managed DIGIT account, created with
-     `tenantMetadata.founder.mobileNumber`, and its projected roles;
+   - `DIGIT_ACCOUNT`: the founder's managed DIGIT account at the new tenant,
+     created with `tenantMetadata.founder.mobileNumber` (or the founder's
+     existing managed mobile), and its projected roles;
 3. reports `_complete` (operation `SUCCEEDED`, signup `ACTIVE`) or `_fail` with
    `retryable` (`RETRYABLE_FAILED`; the owner may `_retry`) or terminal
    (`TERMINAL_FAILED`, identifiers released).

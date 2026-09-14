@@ -10,13 +10,14 @@ import {
   type DesiredRoles,
   ensureManagedAccount,
   managedIdentity,
-  managedSubjectsKey,
+  managedAccountsKey,
 } from "./managed-digit-users.js";
 
 export interface IdentityReconciliationResult {
   acquired: boolean;
   organizations: number;
   subjects: number;
+  accounts: number;
   updated: number;
   deactivated: number;
   unchanged: number;
@@ -74,6 +75,7 @@ export async function runIdentityReconciliation(): Promise<IdentityReconciliatio
     acquired: acquired === "OK",
     organizations: 0,
     subjects: 0,
+    accounts: 0,
     updated: 0,
     deactivated: 0,
     unchanged: 0,
@@ -85,30 +87,35 @@ export async function runIdentityReconciliation(): Promise<IdentityReconciliatio
   try {
     const { organizations, bySubject } = await desiredRolesBySubject();
     result.organizations = organizations;
-    const managed = await getRedis().hgetall(managedSubjectsKey());
-    const subjects = new Set([
-      ...bySubject.keys(),
-      ...Object.entries(managed)
-        .filter(([, issuer]) => issuer === config.keycloakIssuer)
-        .map(([subject]) => subject),
-    ]);
-    result.subjects = subjects.size;
-    for (const subject of subjects) {
-      const desired = bySubject.get(subject) || new Map<string, string[]>();
+    const pairs = new Map<string, { subject: string; tenantId: string }>();
+    for (const [subject, desired] of bySubject) {
+      for (const tenantId of desired.keys()) pairs.set(`${subject}|${tenantId}`, { subject, tenantId });
+    }
+    for (const [field, issuer] of Object.entries(await getRedis().hgetall(managedAccountsKey()))) {
+      const split = field.lastIndexOf("|");
+      if (issuer !== config.keycloakIssuer || split < 0) continue;
+      pairs.set(field, { subject: field.slice(0, split), tenantId: field.slice(split + 1) });
+    }
+    result.subjects = new Set([...pairs.values()].map((pair) => pair.subject)).size;
+    result.accounts = pairs.size;
+    for (const { subject, tenantId } of pairs.values()) {
+      const roles = bySubject.get(subject)?.get(tenantId) ?? null;
       try {
-        const outcome = await ensureManagedAccount(managedIdentity(config.keycloakIssuer, subject), desired);
+        const outcome = await ensureManagedAccount(
+          managedIdentity(config.keycloakIssuer, subject, tenantId), roles,
+        );
         if (!outcome.account) {
-          if (desired.size > 0) result.unprovisioned += 1;
+          if (roles !== null) result.unprovisioned += 1;
           else result.unchanged += 1;
         } else if (!outcome.changed) {
           result.unchanged += 1;
-        } else if (desired.size === 0) {
+        } else if (roles === null) {
           result.deactivated += 1;
         } else {
           result.updated += 1;
         }
       } catch (error) {
-        result.failures.push({ subject, error: (error as Error).message });
+        result.failures.push({ subject: `${subject}@${tenantId}`, error: (error as Error).message });
       }
     }
     return result;

@@ -48,7 +48,7 @@ export DIGIT_MDMS_SEARCH_URL='http://kong:8000/mdms-v2/v1/_search'
 export DIGIT_ADMIN_USERNAME='<dedicated ACCOUNT_ADMIN employee>'
 export DIGIT_ADMIN_PASSWORD='<its password>'
 export DIGIT_ADMIN_TENANT_ID='pg'
-export DIGIT_MANAGED_USER_TENANT_ID='pg'
+export DIGIT_USER_LOGOUT_URL='http://egov-user:8107/user/_logout'
 export IDENTITY_CONTROL_PLANE_TOKEN='<workload-token>'
 export IDENTITY_SESSION_INTROSPECTION_TOKEN='<pgr-session-only-token>'
 export IDENTITY_RECONCILE_ON_STARTUP='true'
@@ -179,8 +179,10 @@ keycloak/
 - **PGR-independent control plane**: idempotent ensure operations can be driven
   by PGR, any other onboarding workflow, or reconciliation
 - **Compatibility bridge, not a proxy**: the BFF creates/rotates a marked DIGIT
-  account per Keycloak subject through existing egov-user APIs using an
-  env-configured `ACCOUNT_ADMIN` credential, logs in as that user, and returns
+  account through existing egov-user APIs using an
+  env-configured `ACCOUNT_ADMIN` credential (one account per tenant, because
+  DIGIT's gateway authorizes tokens at the account's home tenant), logs in as
+  that user, and returns
   the normal DIGIT login response. Legacy locally managed employees are never
   touched, and the admin token is never used for business calls
 - **Legacy executable retained during migration**: the older generic reverse

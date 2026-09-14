@@ -26,10 +26,9 @@ import {
 } from "./identity-session.js";
 import { DigitUnavailableError } from "./digit-user-service.js";
 import {
-  desiredRoles,
   liveMembershipsForSubject,
   membershipsFromClaims,
-  tenantOptions,
+  tenantOption,
   type TenantOption,
 } from "./identity-tenants.js";
 import {
@@ -37,7 +36,7 @@ import {
   ManagedAccountError,
   managedIdentity,
   managedUserLogin,
-  revokeManagedUserLogin,
+  revokeManagedUserLogins,
 } from "./managed-digit-users.js";
 import type { IdentitySession, KCClaims } from "./types.js";
 import { enabledIdentityMethods } from "./identity-methods.js";
@@ -64,16 +63,31 @@ function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOpti
  */
 async function resolveTenantContexts(claims: KCClaims, live = false): Promise<TenantOption[]> {
   const signedMemberships = await membershipsFromClaims(claims);
+  const signedRoles = new Map(signedMemberships.map((membership) => [membership.tenantId, membership.roles]));
   const memberships = live
     ? await liveMembershipsForSubject(claims.sub)
     : signedMemberships;
-  const identity = managedIdentity(config.keycloakIssuer, claims.sub);
-  const { account } = await ensureManagedAccount(identity, desiredRoles(signedMemberships), {
+  const profile = {
     name: claims.name || claims.preferred_username || "",
     emailId: claims.email_verified ? claims.email : undefined,
     mobileNumber: claims.phone_number,
-  }, { createOnly: true });
-  return tenantOptions(memberships, account);
+  };
+  const options: TenantOption[] = [];
+  for (const membership of memberships) {
+    // One managed DIGIT account per tenant: DIGIT's gateway authorizes a token
+    // only for its account's home tenant.
+    const identity = managedIdentity(config.keycloakIssuer, claims.sub, membership.tenantId);
+    const { account } = await ensureManagedAccount(
+      identity, signedRoles.get(membership.tenantId) ?? [], profile, { createOnly: true },
+    ).catch((error) => {
+      // A tenant lacking account prerequisites (e.g. no mobile yet) must not hide the others.
+      if (error instanceof ManagedAccountError) return { account: null };
+      throw error;
+    });
+    const option = tenantOption(membership, account);
+    if (option) options.push(option);
+  }
+  return options;
 }
 
 function digitFailure(error: unknown, res: express.Response, message: string) {
@@ -276,7 +290,7 @@ export function registerIdentityRoutes(app: express.Application): void {
       if (!await isOrganizationMember(selected.organizationId, subject)) {
         return res.status(403).json({ error: "Tenant context is not available" });
       }
-      const login = await managedUserLogin(managedIdentity(config.keycloakIssuer, subject));
+      const login = await managedUserLogin(managedIdentity(config.keycloakIssuer, subject, selected.tenantId));
       const saved = await saveSelectedIdentityContext(current.sessionId, {
         organizationId: selected.organizationId,
         organizationAlias: selected.organizationAlias,
@@ -311,8 +325,8 @@ export function registerIdentityRoutes(app: express.Application): void {
       await deleteIdentitySession(sessionId);
       if (session) {
         // The browser held a copy of the DIGIT token; revoke it with the session.
-        await revokeManagedUserLogin(managedIdentity(config.keycloakIssuer, session.claims.sub))
-          .catch((error) => {
+        await revokeManagedUserLogins(config.keycloakIssuer, session.claims.sub)
+          .catch((error: Error) => {
             console.warn("DIGIT token revocation failed:", (error as Error).message);
           });
       }

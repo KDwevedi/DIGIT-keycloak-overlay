@@ -84,7 +84,7 @@ beforeAll(async () => {
     digitMdmsCreateUrl: `${digitBase}/mdms-v2/v2/_create`,
     digitAdminUsername: "BFF-ADMIN", digitAdminPassword: "Adm1n@Secret", digitAdminTenantId: "pg",
     digitProvisionerUsername: "BFF-PROVISIONER", digitProvisionerPassword: "Adm1n@Secret", digitProvisionerTenantId: "pg",
-    digitManagedUserTenantId: "pg",
+    digitEncGenerateKeyUrl: `${digitBase}/egov-enc-service/crypto/v1/_generatekey`,
     digitManagedBaseRoles: ["EMPLOYEE"],
     digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
     digitRoleClientId: "digit-ui",
@@ -116,9 +116,11 @@ describe("onboarding worker", () => {
       completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "FOUNDER_MEMBERSHIP", "FOUNDER_ROLES", "DIGIT_ACCOUNT"],
     });
     const account = [...digit.accounts.values()].find((candidate) => candidate.name === "New Founder")!;
-    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:/);
+    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:pg\.riverside$/);
+    expect(account.tenantId).toBe("pg.riverside");
     expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort())
       .toEqual(["pg.riverside:EMPLOYEE", "pg.riverside:GRO"]);
+    expect(digit.encKeys.has("pg.riverside")).toBe(true);
 
     // Replaying the same operation (e.g. after a lost lease) is idempotent.
     pgr.queue.push(operation("op-1b", founder, "riverside", "9812345678"));

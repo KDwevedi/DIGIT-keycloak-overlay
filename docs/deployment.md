@@ -78,7 +78,8 @@ Key environment variables:
 | `IDENTITY_ALLOWED_ORIGIN` | Exact browser origin allowed to use the cookie |
 | `DIGIT_USER_SERVICE_URL` / `DIGIT_MDMS_SEARCH_URL` | Existing egov-user and MDMS search endpoints (through Kong) |
 | `DIGIT_ADMIN_USERNAME` / `DIGIT_ADMIN_PASSWORD` / `DIGIT_ADMIN_TENANT_ID` | Dedicated `ACCOUNT_ADMIN` employee for managed-account lifecycle only |
-| `DIGIT_MANAGED_USER_TENANT_ID` / `DIGIT_MANAGED_ROLE_ALLOWLIST` | Home tenant and projectable roles of BFF-managed accounts |
+| `DIGIT_MANAGED_BASE_ROLES` / `DIGIT_MANAGED_ROLE_ALLOWLIST` | Roles of BFF-managed per-tenant accounts |
+| `DIGIT_USER_LOGOUT_URL` / `DIGIT_ENC_GENERATE_KEY_URL` | Internal egov-user logout and egov-enc-service key endpoints |
 | `IDENTITY_CONTROL_PLANE_TOKEN` | Workload credential required by provisioning routes |
 | `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` | Comma-separated clients whose Organization-group roles may be managed |
 | `KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` | Dedicated Keycloak Admin service account |

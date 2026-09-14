@@ -18,11 +18,12 @@ import { ManagedAccountError } from "./managed-digit-users.js";
  * It leases PENDING operations through PGR's workload API (never its
  * database) and provisions, idempotently:
  *   TENANT_FOUNDATION  DIGIT `tenant.tenants` record (MDMS) when a provisioner
- *                      credential is configured; otherwise the tenant must exist
+ *                      credential is configured, otherwise the tenant must exist;
+ *                      plus the tenant's egov-enc-service key when configured
  *   ORGANIZATION       Keycloak Organization mapped to the tenant
  *   FOUNDER_MEMBERSHIP founder added to the Organization
  *   FOUNDER_ROLES      founder group with ONBOARDING_FOUNDER_ROLES
- *   DIGIT_ACCOUNT      founder's BFF-managed DIGIT account and projected roles
+ *   DIGIT_ACCOUNT      founder's BFF-managed DIGIT account at the new tenant
  * then reports success, retryable failure or terminal failure back to PGR.
  * Other tenant masters (boundaries, departments, service definitions,
  * localization) are not provisioned here.
@@ -76,9 +77,33 @@ async function settle(path: "_complete" | "_fail", body: Record<string, unknown>
   if (!response.ok) throw new Error(`PGR ${path} returned ${response.status}`);
 }
 
+/** egov-enc-service keys are per tenant and not inherited; PII writes fail without one. */
+async function ensureEncryptionKey(tenantId: string): Promise<void> {
+  if (!config.digitEncGenerateKeyUrl) return;
+  let response: Response;
+  try {
+    response = await fetch(config.digitEncGenerateKeyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ RequestInfo: { apiId: "digit-identity-bff" }, tenantId }),
+      signal: AbortSignal.timeout(config.digitTimeoutMs),
+    });
+  } catch {
+    throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE", "DIGIT encryption key request failed", true);
+  }
+  await response.body?.cancel();
+  if (!response.ok) {
+    throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
+      `DIGIT encryption key request returned ${response.status}`, true);
+  }
+}
+
 async function ensureTenantFoundation(signup: ClaimedOperation["Signup"]): Promise<void> {
   const tenantId = signup.requestedTenantId;
-  if (await isActiveDigitTenant(tenantId)) return;
+  if (await isActiveDigitTenant(tenantId)) {
+    await ensureEncryptionKey(tenantId);
+    return;
+  }
   if (!digitProvisionerConfigured()) {
     throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
       "The DIGIT tenant does not exist and no tenant provisioner is configured", true);
@@ -128,6 +153,7 @@ async function ensureTenantFoundation(signup: ClaimedOperation["Signup"]): Promi
     throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
       `DIGIT tenant create returned ${status} and the tenant is not visible yet`, true);
   }
+  await ensureEncryptionKey(tenantId);
 }
 
 function classify(error: unknown, step: string): ProvisioningFailure {

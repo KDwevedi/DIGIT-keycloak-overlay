@@ -8,7 +8,7 @@ import {
   managedIdentity,
   managedUserLogin,
   oneTimePassword,
-  revokeManagedUserLogin,
+  revokeManagedUserLogins,
 } from "../../src/managed-digit-users.js";
 import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
 
@@ -24,7 +24,6 @@ beforeAll(async () => {
     digitAdminUsername: "BFF-ADMIN",
     digitAdminPassword: "Adm1n@Secret",
     digitAdminTenantId: "pg",
-    digitManagedUserTenantId: "pg",
     digitManagedBaseRoles: ["EMPLOYEE"],
     digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
     digitTokenRefreshSkewSeconds: 60,
@@ -51,7 +50,6 @@ beforeEach(() => {
 });
 
 const subject = () => `subject-${run}`;
-const desired = (entries: Array<[string, string[]]>) => new Map(entries);
 const profile = { name: "New Founder", emailId: "founder@example.org", mobileNumber: "0712345678" };
 
 describe("managed DIGIT accounts", () => {
@@ -64,9 +62,9 @@ describe("managed DIGIT accounts", () => {
   });
 
   it("creates a marked account, logs in as that user, and never stores the password", async () => {
-    const identity = managedIdentity(ISSUER, subject());
+    const identity = managedIdentity(ISSUER, subject(), "pg");
     const adminLogins = fake.stats.adminLogins;
-    const result = await ensureManagedAccount(identity, desired([["pg", ["GRO"]]]), profile);
+    const result = await ensureManagedAccount(identity, ["GRO"], profile);
     expect(result.created).toBe(true);
     expect(result.account).toMatchObject({
       userName: identity.username, identificationMark: identity.marker, tenantId: "pg", type: "EMPLOYEE",
@@ -92,9 +90,9 @@ describe("managed DIGIT accounts", () => {
   });
 
   it("reuses a cached user token and rotates the password only when it must be regenerated", async () => {
-    const identity = managedIdentity(ISSUER, subject());
+    const identity = managedIdentity(ISSUER, subject(), "pg");
     fake.setTokenTtlSeconds(3600);
-    await ensureManagedAccount(identity, desired([["pg", []]]), profile);
+    await ensureManagedAccount(identity, [], profile);
     const first = await managedUserLogin(identity);
     const second = await managedUserLogin(identity);
     expect(second.accessToken).toBe(first.accessToken);
@@ -109,8 +107,8 @@ describe("managed DIGIT accounts", () => {
   });
 
   it("serializes concurrent regeneration for one user behind the Redis lease", async () => {
-    const identity = managedIdentity(ISSUER, subject());
-    await ensureManagedAccount(identity, desired([["pg", []]]), profile);
+    const identity = managedIdentity(ISSUER, subject(), "pg");
+    await ensureManagedAccount(identity, [], profile);
     fake.expireAllTokens();
     await getRedis().del(`${config.cachePrefix}:digit-user-token:${identity.key}`);
     const rotations = fake.stats.passwordUpdates;
@@ -120,75 +118,87 @@ describe("managed DIGIT accounts", () => {
   });
 
   it("never updates or rotates a legacy account that only shares the username", async () => {
-    const identity = managedIdentity(ISSUER, subject());
+    const identity = managedIdentity(ISSUER, subject(), "pg");
     fake.addAccount({
       userName: identity.username, name: "Legacy", mobileNumber: "0711111111", emailId: null,
       tenantId: "pg", type: "EMPLOYEE", active: true, identificationMark: null,
       roles: [{ code: "EMPLOYEE", tenantId: "pg" }], password: "Legacy@1234",
     });
     const updates = fake.stats.updates;
-    await expect(ensureManagedAccount(identity, desired([["pg", ["GRO"]]]), profile))
+    await expect(ensureManagedAccount(identity, ["GRO"], profile))
       .rejects.toBeInstanceOf(ManagedAccountError);
     await expect(managedUserLogin(identity)).rejects.toBeInstanceOf(ManagedAccountError);
     expect(fake.stats.updates).toBe(updates);
   });
 
   it("projects role changes, revokes the stale token, and deactivates former members", async () => {
-    const identity = managedIdentity(ISSUER, subject());
-    await ensureManagedAccount(identity, desired([["pg", []]]), profile);
+    const identity = managedIdentity(ISSUER, subject(), "pg.citya");
+    const created = await ensureManagedAccount(identity, [], profile);
+    expect(created.account).toMatchObject({ tenantId: "pg.citya", userName: identity.username });
     const before = await managedUserLogin(identity);
 
-    const changed = await ensureManagedAccount(identity, desired([["pg", ["GRO"]], ["pg.citya", ["PGR_VIEWER"]]]));
+    const changed = await ensureManagedAccount(identity, ["GRO", "PGR_VIEWER"]);
     expect(changed.changed).toBe(true);
     expect(fake.tokens.has(before.accessToken)).toBe(false);
     expect(changed.account!.roles.map((role) => `${role.tenantId}:${role.code}`).sort()).toEqual([
-      "pg.citya:EMPLOYEE", "pg.citya:PGR_VIEWER", "pg:EMPLOYEE", "pg:GRO",
+      "pg.citya:EMPLOYEE", "pg.citya:GRO", "pg.citya:PGR_VIEWER",
     ]);
-    expect((await ensureManagedAccount(identity, desired([["pg", ["GRO"]], ["pg.citya", ["PGR_VIEWER", "NOT_ALLOWED"]]]))).changed)
-      .toBe(false);
+    expect((await ensureManagedAccount(identity, ["PGR_VIEWER", "GRO", "NOT_ALLOWED"])).changed).toBe(false);
 
     const renewed = await managedUserLogin(identity);
-    const removed = await ensureManagedAccount(identity, new Map());
+    const removed = await ensureManagedAccount(identity, null);
     expect(removed.account!.active).toBe(false);
     expect(fake.tokens.has(renewed.accessToken)).toBe(false);
     await expect(managedUserLogin(identity)).rejects.toMatchObject({ status: 403 });
   });
 
+  it("keeps one account per tenant, each marked with subject and tenant", async () => {
+    const id = subject();
+    const home = managedIdentity(ISSUER, id, "pg");
+    const city = managedIdentity(ISSUER, id, "pg.citya");
+    expect(home.username).not.toBe(city.username);
+    expect(home.marker.split(":").slice(0, 3)).toEqual(city.marker.split(":").slice(0, 3));
+    const first = await ensureManagedAccount(home, [], profile);
+    const second = await ensureManagedAccount(city, ["GRO"], profile);
+    expect(first.account!.uuid).not.toBe(second.account!.uuid);
+    expect(second.account!.roles.every((role) => role.tenantId === "pg.citya")).toBe(true);
+  });
+
   it("requires a mobile number to create an account and does not create without a profile", async () => {
-    const identity = managedIdentity(ISSUER, subject());
-    await expect(ensureManagedAccount(identity, desired([["pg", []]]), { name: "No Phone" }))
+    const identity = managedIdentity(ISSUER, subject(), "pg");
+    await expect(ensureManagedAccount(identity, [], { name: "No Phone" }))
       .rejects.toBeInstanceOf(ManagedAccountError);
-    expect((await ensureManagedAccount(identity, desired([["pg", []]]))).account).toBeNull();
+    expect((await ensureManagedAccount(identity, [])).account).toBeNull();
   });
 
   it("refreshes the cached admin token from environment credentials after DIGIT rejects it", async () => {
     resetDigitAdminToken();
-    const identity = managedIdentity(ISSUER, subject());
-    await ensureManagedAccount(identity, desired([["pg", []]]), profile);
+    const identity = managedIdentity(ISSUER, subject(), "pg");
+    await ensureManagedAccount(identity, [], profile);
     const adminLogins = fake.stats.adminLogins;
     for (const [token, entry] of fake.tokens) {
       const account = fake.accounts.get(entry.uuid);
       if (account?.roles.some((role) => role.code === "ACCOUNT_ADMIN")) fake.tokens.delete(token);
     }
-    await ensureManagedAccount(identity, desired([["pg", ["GRO"]]]));
+    await ensureManagedAccount(identity, ["GRO"]);
     expect(fake.stats.adminLogins).toBe(adminLogins + 1);
   });
 
   it("reports a rejected admin credential as unavailable, not as an account conflict", async () => {
     resetDigitAdminToken();
     (config as any).digitAdminPassword = "Wrong@Pass1";
-    const identity = managedIdentity(ISSUER, subject());
-    await expect(ensureManagedAccount(identity, desired([["pg", []]]), profile))
+    const identity = managedIdentity(ISSUER, subject(), "pg");
+    await expect(ensureManagedAccount(identity, [], profile))
       .rejects.toMatchObject({ status: 503 });
     (config as any).digitAdminPassword = "Adm1n@Secret";
     resetDigitAdminToken();
   });
 
   it("logout revokes the user's DIGIT token", async () => {
-    const identity = managedIdentity(ISSUER, subject());
-    await ensureManagedAccount(identity, desired([["pg", []]]), profile);
+    const identity = managedIdentity(ISSUER, subject(), "pg");
+    await ensureManagedAccount(identity, [], profile);
     const login = await managedUserLogin(identity);
-    await revokeManagedUserLogin(identity);
+    await revokeManagedUserLogins(ISSUER, identity.subject);
     expect(fake.tokens.has(login.accessToken)).toBe(false);
   });
 });

@@ -18,8 +18,11 @@ import {
 /**
  * DIGIT accounts owned by this Keycloak-BFF flow.
  *
+ * One account exists per (verified Keycloak issuer+subject, DIGIT tenant) and
+ * lives AT that tenant: DIGIT's gateway authorizes a token only for its
+ * account's home tenant, so one account cannot serve several tenants.
  * An account is managed only when BOTH its username and its
- * identificationMark are derived from the verified Keycloak (issuer, subject).
+ * identificationMark are derived from that (issuer, subject, tenant).
  * Anything else, including every locally managed legacy employee, is never
  * updated, rotated or deactivated here.
  *
@@ -33,6 +36,7 @@ export const MANAGED_USER_TYPE = "EMPLOYEE";
 export interface ManagedIdentity {
   issuer: string;
   subject: string;
+  tenantId: string;
   key: string;
   username: string;
   marker: string;
@@ -44,7 +48,7 @@ export interface ManagedProfile {
   mobileNumber?: string;
 }
 
-/** tenantId -> DIGIT role codes the managed account should hold there. */
+/** tenantId -> allowlisted DIGIT role codes the subject should hold there. */
 export type DesiredRoles = Map<string, string[]>;
 
 export class ManagedAccountError extends Error {
@@ -53,14 +57,16 @@ export class ManagedAccountError extends Error {
   }
 }
 
-export function managedIdentity(issuer: string, subject: string): ManagedIdentity {
-  const key = createHash("sha256").update(`${issuer}\n${subject}`).digest("hex");
+export function managedIdentity(issuer: string, subject: string, tenantId: string): ManagedIdentity {
+  const subjectKey = createHash("sha256").update(`${issuer}\n${subject}`).digest("hex");
+  const key = createHash("sha256").update(`${issuer}\n${subject}\n${tenantId}`).digest("hex");
   return {
     issuer,
     subject,
+    tenantId,
     key,
     username: `kcbff-${key.slice(0, 40)}`,
-    marker: `keycloak-bff:v1:${key}`,
+    marker: `keycloak-bff:v1:${subjectKey}:${tenantId}`,
   };
 }
 
@@ -86,7 +92,9 @@ const tokenKey = (identity: ManagedIdentity) =>
   `${config.cachePrefix}:digit-user-token:${identity.key}`;
 const leaseKey = (identity: ManagedIdentity) =>
   `${config.cachePrefix}:digit-user-lease:${identity.key}`;
-export const managedSubjectsKey = () => `${config.cachePrefix}:digit-managed-subjects`;
+/** Hash of `${subject}|${tenantId}` -> issuer for every account this BFF provisioned. */
+export const managedAccountsKey = () => `${config.cachePrefix}:digit-managed-accounts`;
+const indexField = (identity: ManagedIdentity) => `${identity.subject}|${identity.tenantId}`;
 
 async function withUserLease<T>(identity: ManagedIdentity, operation: () => Promise<T>): Promise<T> {
   const value = randomUUID();
@@ -109,18 +117,10 @@ async function withUserLease<T>(identity: ManagedIdentity, operation: () => Prom
   }
 }
 
-function requireManagedTenant(): string {
-  if (!config.digitManagedUserTenantId) {
-    throw new DigitUnavailableError("DIGIT managed-user tenant is not configured");
-  }
-  return config.digitManagedUserTenantId;
-}
-
 async function findAccount(adminToken: string, identity: ManagedIdentity): Promise<DigitAccount | null> {
-  const tenantId = requireManagedTenant();
   for (const active of [true, false]) {
     const accounts = await searchAccounts(adminToken, {
-      userName: identity.username, tenantId, userType: MANAGED_USER_TYPE, active,
+      userName: identity.username, tenantId: identity.tenantId, userType: MANAGED_USER_TYPE, active,
     });
     const account = accounts.find((candidate) => candidate.userName === identity.username);
     if (!account) continue;
@@ -132,17 +132,11 @@ async function findAccount(adminToken: string, identity: ManagedIdentity): Promi
   return null;
 }
 
-export function desiredDigitRoles(desired: DesiredRoles): DigitRole[] {
-  const roles = new Map<string, DigitRole>();
-  for (const [tenantId, codes] of desired) {
-    for (const code of [...config.digitManagedBaseRoles, ...codes]) {
-      if (!config.digitManagedRoleAllowlist.includes(code) &&
-          !config.digitManagedBaseRoles.includes(code)) continue;
-      roles.set(`${tenantId}:${code}`, { code, name: code, tenantId });
-    }
-  }
-  return [...roles.values()].sort((left, right) =>
-    `${left.tenantId}:${left.code}`.localeCompare(`${right.tenantId}:${right.code}`));
+/** Base roles plus allowlisted codes, all scoped to the account's own tenant. */
+export function desiredDigitRoles(tenantId: string, codes: string[]): DigitRole[] {
+  const allowed = [...new Set([...config.digitManagedBaseRoles,
+    ...codes.filter((code) => config.digitManagedRoleAllowlist.includes(code))])].sort();
+  return allowed.map((code) => ({ code, name: code, tenantId }));
 }
 
 function roleSet(roles: DigitRole[]): string {
@@ -200,26 +194,26 @@ export interface EnsureResult {
 }
 
 /**
- * Resolves the subject's managed DIGIT account and makes its roles and active
- * state match `desired`. Creates the account only when `profile` is supplied
- * and there is at least one desired tenant. With `createOnly`, an existing
- * account is returned untouched: callers holding possibly stale session
- * claims must not grant or revoke roles. Role or activation changes revoke
- * the cached user token so the next issuance reflects DIGIT's new grants.
+ * Makes the (subject, tenant) managed account match `roles`: `null` means the
+ * subject is no longer a member there, so an existing account is deactivated.
+ * A missing account is created only when `profile` is supplied. With
+ * `createOnly`, an existing account is returned untouched: callers holding
+ * possibly stale session claims must not grant or revoke roles. Role or
+ * activation changes revoke the cached user token.
  */
 export async function ensureManagedAccount(
   identity: ManagedIdentity,
-  desired: DesiredRoles,
+  roleCodes: string[] | null,
   profile?: ManagedProfile,
   options: { createOnly?: boolean } = {},
 ): Promise<EnsureResult> {
   return withUserLease(identity, () => withDigitAdmin(async (adminToken) => {
     const account = await findAccount(adminToken, identity);
-    const roles = desiredDigitRoles(desired);
     if (account && options.createOnly) return { account, created: false, changed: false };
+    const roles = roleCodes === null ? [] : desiredDigitRoles(identity.tenantId, roleCodes);
 
     if (!account) {
-      if (roles.length === 0 || !profile) return { account: null, created: false, changed: false };
+      if (roleCodes === null || !profile) return { account: null, created: false, changed: false };
       if (!profile.name.trim() || !profile.mobileNumber?.trim()) {
         throw new ManagedAccountError("A name and mobile number are required to create the DIGIT account");
       }
@@ -229,7 +223,7 @@ export async function ensureManagedAccount(
         name: profile.name.trim().slice(0, 50),
         mobileNumber: profile.mobileNumber.trim(),
         emailId: profile.emailId || null,
-        tenantId: requireManagedTenant(),
+        tenantId: identity.tenantId,
         type: MANAGED_USER_TYPE,
         active: true,
         identificationMark: identity.marker,
@@ -237,15 +231,15 @@ export async function ensureManagedAccount(
         password,
       });
       const login = await passwordLogin({
-        username: identity.username, password, tenantId: created.tenantId, userType: MANAGED_USER_TYPE,
+        username: identity.username, password, tenantId: identity.tenantId, userType: MANAGED_USER_TYPE,
       });
       await cacheLogin(identity, login);
-      await getRedis().hset(managedSubjectsKey(), identity.subject, identity.issuer);
+      await getRedis().hset(managedAccountsKey(), indexField(identity), identity.issuer);
       return { account: created, created: true, changed: true };
     }
 
-    await getRedis().hset(managedSubjectsKey(), identity.subject, identity.issuer);
-    if (roles.length === 0) {
+    await getRedis().hset(managedAccountsKey(), indexField(identity), identity.issuer);
+    if (roleCodes === null) {
       if (!account.active) return { account, created: false, changed: false };
       const updated = await updateAccount(adminToken, { ...editable(account), active: false });
       await dropCachedLogin(identity);
@@ -288,9 +282,20 @@ export async function managedUserLogin(identity: ManagedIdentity): Promise<Digit
   });
 }
 
-/** Revokes and forgets the managed user's cached DIGIT token (logout). */
-export async function revokeManagedUserLogin(identity: ManagedIdentity): Promise<void> {
-  await withUserLease(identity, () => dropCachedLogin(identity));
+/** Revokes and forgets the cached DIGIT tokens of every managed account of a subject (logout). */
+export async function revokeManagedUserLogins(issuer: string, subject: string): Promise<void> {
+  for (const tenantId of await managedTenantsOf(issuer, subject)) {
+    const identity = managedIdentity(issuer, subject, tenantId);
+    await withUserLease(identity, () => dropCachedLogin(identity));
+  }
+}
+
+/** Tenants where this BFF has provisioned an account for the subject. */
+export async function managedTenantsOf(issuer: string, subject: string): Promise<string[]> {
+  const entries = await getRedis().hgetall(managedAccountsKey());
+  return Object.entries(entries)
+    .filter(([field, owner]) => owner === issuer && field.startsWith(`${subject}|`))
+    .map(([field]) => field.slice(subject.length + 1));
 }
 
 export async function findManagedAccount(identity: ManagedIdentity): Promise<DigitAccount | null> {

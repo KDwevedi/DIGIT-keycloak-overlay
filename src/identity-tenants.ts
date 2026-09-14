@@ -6,7 +6,6 @@ import {
   type OrganizationMapping,
 } from "./identity-admin.js";
 import { DigitUnavailableError, type DigitAccount } from "./digit-user-service.js";
-import type { DesiredRoles } from "./managed-digit-users.js";
 import type { KCClaims } from "./types.js";
 
 export interface TenantOption {
@@ -109,28 +108,22 @@ export async function liveMembershipsForSubject(subject: string): Promise<Organi
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function desiredRoles(memberships: Array<{ tenantId: string; roles: string[] }>): DesiredRoles {
-  return new Map(memberships.map((membership) => [membership.tenantId, membership.roles]));
-}
-
-/** Membership ∩ DIGIT: tenants where the active managed account actually holds roles. */
-export function tenantOptions(
-  memberships: OrganizationMembership[],
+/** Membership ∩ DIGIT: the tenant's managed account is active and holds roles there. */
+export function tenantOption(
+  membership: OrganizationMembership,
   account: DigitAccount | null,
-): TenantOption[] {
-  if (!account?.active) return [];
-  return memberships.flatMap((membership) => {
-    const roles = [...new Set(account.roles
-      .filter((role) => role.tenantId === membership.tenantId)
-      .map((role) => role.code))].sort();
-    return roles.length ? [{
-      organizationId: membership.organizationId,
-      organizationAlias: membership.alias,
-      tenantId: membership.tenantId,
-      name: membership.name,
-      roles,
-    }] : [];
-  });
+): TenantOption | null {
+  if (!account?.active) return null;
+  const roles = [...new Set(account.roles
+    .filter((role) => role.tenantId === membership.tenantId)
+    .map((role) => role.code))].sort();
+  return roles.length ? {
+    organizationId: membership.organizationId,
+    organizationAlias: membership.alias,
+    tenantId: membership.tenantId,
+    name: membership.name,
+    roles,
+  } : null;
 }
 
 export function clearTenantCaches(): void {

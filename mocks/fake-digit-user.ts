@@ -147,6 +147,15 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     return res.json({ mdms: [req.body.Mdms] });
   });
 
+  const encKeys = new Set<string>();
+  app.post("/egov-enc-service/crypto/v1/_generatekey", (req, res) => {
+    const tenantId = req.body?.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "tenantId" });
+    const created = !encKeys.has(tenantId);
+    encKeys.add(tenantId);
+    return res.json({ tenantId, created, keyId: 1 });
+  });
+
   app.post("/mdms-v2/v1/_search", (req, res) => {
     const root = req.body?.MdmsCriteria?.tenantId;
     return res.json({ MdmsRes: { tenant: { tenants: options.tenants
@@ -155,7 +164,7 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
 
   let server: Server;
   return {
-    accounts, tokens, stats, receivedPasswords, addAccount,
+    accounts, tokens, stats, receivedPasswords, addAccount, encKeys,
     setTokenTtlSeconds(seconds: number) { tokenTtlSeconds = seconds; },
     expireAllTokens() { for (const entry of tokens.values()) entry.expiresAt = Date.now() - 1; },
     async start(): Promise<string> {

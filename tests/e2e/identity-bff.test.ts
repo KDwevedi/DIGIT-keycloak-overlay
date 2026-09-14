@@ -48,7 +48,6 @@ beforeAll(async () => {
     digitAdminUsername: "BFF-ADMIN",
     digitAdminPassword: "Adm1n@Secret",
     digitAdminTenantId: "ke",
-    digitManagedUserTenantId: "ke",
     digitManagedBaseRoles: ["EMPLOYEE"],
     digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
     digitRoleClientId: "digit-ui",
@@ -128,7 +127,9 @@ describe("identity BFF", () => {
     const firstBody = await first.json();
     expect(firstBody).toMatchObject({ created: true });
     const repeat = await post("/memberships/_ensure", { organizationId: nakuru, userId: founderId });
-    expect(await repeat.json()).toEqual({ digitUserUuid: firstBody.digitUserUuid, created: false });
+    expect(await repeat.json()).toEqual({
+      tenantId: "ke.nakuru", digitUserUuid: firstBody.digitUserUuid, created: false,
+    });
 
     const roles = await post("/role-assignments/_ensure", {
       organizationId: nakuru, userId: founderId, groupName: "officers", clientId: "digit-ui", roles: ["GRO"],
@@ -140,20 +141,26 @@ describe("identity BFF", () => {
 
     const nyeri = await ensureOrganization("ke.nyeri", "nyeri");
     const second = await post("/memberships/_ensure", { organizationId: nyeri, userId: founderId });
-    expect(await second.json()).toEqual({ digitUserUuid: firstBody.digitUserUuid, created: false });
+    const secondBody = await second.json();
+    // DIGIT authorizes a token only at its account's home tenant: one account per tenant.
+    expect(secondBody).toMatchObject({ tenantId: "ke.nyeri", created: true });
+    expect(secondBody.digitUserUuid).not.toBe(firstBody.digitUserUuid);
 
-    const account = digit.accounts.get(firstBody.digitUserUuid)!;
-    expect(account.userName).toMatch(/^kcbff-/);
-    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:/);
-    expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort()).toEqual([
-      "ke.nakuru:EMPLOYEE", "ke.nakuru:GRO", "ke.nyeri:EMPLOYEE",
+    const nakuruAccount = digit.accounts.get(firstBody.digitUserUuid)!;
+    const nyeriAccount = digit.accounts.get(secondBody.digitUserUuid)!;
+    expect(nakuruAccount.userName).toMatch(/^kcbff-/);
+    expect(nakuruAccount.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:ke\.nakuru$/);
+    expect(nakuruAccount.tenantId).toBe("ke.nakuru");
+    expect(nakuruAccount.roles.map((role) => `${role.tenantId}:${role.code}`).sort()).toEqual([
+      "ke.nakuru:EMPLOYEE", "ke.nakuru:GRO",
     ]);
-    expect(digit.accounts.size).toBe(2);
+    expect(nyeriAccount.roles.map((role) => `${role.tenantId}:${role.code}`)).toEqual(["ke.nyeri:EMPLOYEE"]);
+    expect(digit.accounts.size).toBe(3);
 
     const reconciliation = await post("/reconciliation/_run", {});
     expect(reconciliation.status).toBe(200);
     expect(await reconciliation.json()).toMatchObject({
-      acquired: true, organizations: 4, unchanged: 1, unprovisioned: 1, failures: [],
+      acquired: true, organizations: 4, unchanged: 2, unprovisioned: 2, failures: [],
     });
   });
 
@@ -341,7 +348,7 @@ describe("identity BFF", () => {
     expect(selected.status).toBe(200);
     const selectedBody = await selected.json();
     const managed = [...digit.accounts.values()].find((candidate) =>
-      candidate.userName !== "BFF-ADMIN" && candidate.name === "Demo Person")!;
+      candidate.name === "Demo Person" && candidate.tenantId === "ke.bomet")!;
     expect(managed.identificationMark).toMatch(/^keycloak-bff:v1:/);
     expect(digit.tokens.get(selectedBody.access_token)?.uuid).toBe(managed.uuid);
     expect(Object.keys(selectedBody).sort()).toEqual(
@@ -366,9 +373,10 @@ describe("identity BFF", () => {
     });
 
     // Session claims never re-grant roles DIGIT no longer holds.
-    const managedAccount = [...digit.accounts.values()].find((candidate) => candidate.name === "Demo Person")!;
+    const managedAccount = [...digit.accounts.values()].find((candidate) =>
+      candidate.name === "Demo Person" && candidate.tenantId === "ke.kisumu")!;
     const grantedRoles = managedAccount.roles;
-    managedAccount.roles = grantedRoles.filter((role) => role.tenantId !== "ke.kisumu");
+    managedAccount.roles = [];
     const staleClaims = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/tenants`,
       { headers: { Cookie: cookie } },

@@ -181,16 +181,22 @@ export function updateAccount(authToken: string, user: DigitAccountInput): Promi
 
 /** Revokes a DIGIT access token. Already-invalid tokens are treated as revoked. */
 export async function revokeToken(accessToken: string): Promise<void> {
+  const url = config.digitUserLogoutUrl || endpoint("/_logout");
+  let response: Response;
   try {
-    await send("/_logout", {
+    response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // egov-user reads TokenWrapper.access_token; Kong authorizes the route
-      // from RequestInfo.authToken. Both carry the token being revoked.
+      // egov-user reads TokenWrapper.access_token; RequestInfo keeps the call
+      // valid when it is routed through Kong instead.
       body: JSON.stringify({ access_token: accessToken, RequestInfo: requestInfo(accessToken) }),
-    }, "logout");
-  } catch (error) {
-    if (error instanceof DigitUnauthorizedError) return;
-    throw error;
+      signal: AbortSignal.timeout(config.digitTimeoutMs),
+    });
+  } catch {
+    throw new DigitUnavailableError("DIGIT logout request failed");
   }
+  await response.body?.cancel();
+  // egov-user answers 400 "Logout failed" for a token it no longer knows.
+  if (response.ok || response.status === 401 || response.status === 400) return;
+  throw new DigitUnavailableError(`DIGIT logout returned ${response.status}`);
 }
