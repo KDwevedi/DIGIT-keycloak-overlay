@@ -59,8 +59,11 @@ tenant exists in DIGIT MDMS `tenant.tenants`. A tenant is offered only when:
 2. the Organization is enabled and mapped, and the tenant exists in DIGIT; and
 3. the managed DIGIT account is active and holds roles for that tenant.
 
-Selection re-checks membership live through the Keycloak Admin API, because
-session claims can be one access-token lifetime old.
+Session claims can be one access-token lifetime old, so they never change an
+existing account's roles. Sign-in only creates a missing account from them.
+Role and membership projection comes from live Keycloak state through the
+control plane and reconciliation, and selection re-checks membership live
+through the Keycloak Admin API.
 
 ## Managed DIGIT accounts
 

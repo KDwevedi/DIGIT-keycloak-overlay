@@ -363,6 +363,19 @@ describe("identity BFF", () => {
       context: { tenantId: "ke.bomet", name: "Bomet County", organizationAlias: "bomet" },
     });
 
+    // Session claims never re-grant roles DIGIT no longer holds.
+    const managedAccount = [...digit.accounts.values()].find((candidate) => candidate.name === "Demo Person")!;
+    const grantedRoles = managedAccount.roles;
+    managedAccount.roles = grantedRoles.filter((role) => role.tenantId !== "ke.kisumu");
+    const staleClaims = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/tenants`,
+      { headers: { Cookie: cookie } },
+    );
+    expect((await staleClaims.json()).tenants.map((tenant: { tenantId: string }) => tenant.tenantId))
+      .toEqual(["ke.bomet"]);
+    expect(managedAccount.roles.some((role) => role.tenantId === "ke.kisumu")).toBe(false);
+    managedAccount.roles = grantedRoles;
+
     // Membership is rechecked live in Keycloak, not only from session claims.
     await fetch(
       `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/organizations/org-kisumu-id/members/identity-user-1`,

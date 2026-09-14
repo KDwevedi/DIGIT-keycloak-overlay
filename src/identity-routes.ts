@@ -55,9 +55,11 @@ function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOpti
 }
 
 /**
- * Resolves the managed DIGIT account for the signed-in identity, creating it
- * when absent and projecting the signed Organization roles, then returns the
- * tenants present in both Keycloak membership and DIGIT grants.
+ * Tenants present in both the session's Organization memberships and the
+ * managed DIGIT account's grants. A missing account is created from these
+ * claims (fresh at sign-in). An existing account's roles are never changed
+ * here: session claims can be stale, so role projection comes only from live
+ * Keycloak state through the control plane and reconciliation.
  */
 async function resolveTenantContexts(claims: KCClaims): Promise<TenantOption[]> {
   const memberships = await membershipsFromClaims(claims);
@@ -66,7 +68,7 @@ async function resolveTenantContexts(claims: KCClaims): Promise<TenantOption[]> 
     name: claims.name || claims.preferred_username || "",
     emailId: claims.email_verified ? claims.email : undefined,
     mobileNumber: claims.phone_number,
-  });
+  }, { createOnly: true });
   return tenantOptions(memberships, account);
 }
 
@@ -227,7 +229,6 @@ export function registerIdentityRoutes(app: express.Application): void {
   }));
 
   app.get("/identity/v1/tenants", asyncRoute(async (req, res) => {
-    // Resolves (and when absent creates) the managed DIGIT account.
     const current = await currentSession(req.headers.cookie);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });

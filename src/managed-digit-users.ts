@@ -202,17 +202,21 @@ export interface EnsureResult {
 /**
  * Resolves the subject's managed DIGIT account and makes its roles and active
  * state match `desired`. Creates the account only when `profile` is supplied
- * and there is at least one desired tenant. Role or activation changes revoke
+ * and there is at least one desired tenant. With `createOnly`, an existing
+ * account is returned untouched: callers holding possibly stale session
+ * claims must not grant or revoke roles. Role or activation changes revoke
  * the cached user token so the next issuance reflects DIGIT's new grants.
  */
 export async function ensureManagedAccount(
   identity: ManagedIdentity,
   desired: DesiredRoles,
   profile?: ManagedProfile,
+  options: { createOnly?: boolean } = {},
 ): Promise<EnsureResult> {
   return withUserLease(identity, () => withDigitAdmin(async (adminToken) => {
     const account = await findAccount(adminToken, identity);
     const roles = desiredDigitRoles(desired);
+    if (account && options.createOnly) return { account, created: false, changed: false };
 
     if (!account) {
       if (roles.length === 0 || !profile) return { account: null, created: false, changed: false };
