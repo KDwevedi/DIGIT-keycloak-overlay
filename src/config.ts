@@ -7,6 +7,14 @@ function csv(value: string): string[] {
   return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
 }
 
+function cookieSameSite(value: string): "Lax" | "None" | "Strict" {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "lax") return "Lax";
+  if (normalized === "none") return "None";
+  if (normalized === "strict") return "Strict";
+  throw new Error("IDENTITY_COOKIE_SAME_SITE must be Lax, None, or Strict");
+}
+
 export function parseIdentityAuthMethods(raw: string): IdentityAuthMethod[] {
   const value: unknown = JSON.parse(raw);
   if (!Array.isArray(value) || value.length === 0) {
@@ -85,8 +93,11 @@ export const config = {
     "http://localhost:18200/identity/v1/callback",
   identityPostLoginRedirect:
     process.env.IDENTITY_POST_LOGIN_REDIRECT || "/",
-  identityAllowedOrigin:
-    process.env.IDENTITY_ALLOWED_ORIGIN || "http://localhost:3000",
+  identityAllowedOrigins: csv(
+    process.env.IDENTITY_ALLOWED_ORIGINS ||
+      process.env.IDENTITY_ALLOWED_ORIGIN ||
+      "http://localhost:3000",
+  ),
   identityScope:
     process.env.IDENTITY_SCOPE || "openid profile email organization:*",
   identityAuthMethods: parseIdentityAuthMethods(
@@ -96,6 +107,9 @@ export const config = {
   identityCookieName:
     process.env.IDENTITY_COOKIE_NAME || "digit_identity_session",
   identityCookieSecure: process.env.IDENTITY_COOKIE_SECURE !== "false",
+  identityCookieSameSite: cookieSameSite(
+    process.env.IDENTITY_COOKIE_SAME_SITE || "Lax",
+  ),
   identityLoginTtlSeconds: parseInt(
     process.env.IDENTITY_LOGIN_TTL_SECONDS || "300",
   ),

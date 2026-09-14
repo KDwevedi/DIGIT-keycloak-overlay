@@ -24,7 +24,7 @@ export function createIdentityApp(): express.Application {
 
   app.use((req, res, next) => {
     const origin = req.get("origin");
-    if (req.path.startsWith("/identity/v1") && origin === config.identityAllowedOrigin) {
+    if (req.path.startsWith("/identity/v1") && origin && config.identityAllowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Vary", "Origin");

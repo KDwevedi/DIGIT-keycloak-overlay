@@ -173,7 +173,7 @@ export async function createApp() {
   // CORS for browser requests
   app.use((_req, res, next) => {
     const origin = _req.headers.origin;
-    if (_req.path.startsWith("/identity/v1") && origin === config.identityAllowedOrigin) {
+    if (_req.path.startsWith("/identity/v1") && origin && config.identityAllowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Vary", "Origin");

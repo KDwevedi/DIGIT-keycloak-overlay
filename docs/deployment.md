@@ -75,7 +75,8 @@ Key environment variables:
 | `KEYCLOAK_ORGANIZATION_REALM` | Shared Organizations-enabled realm |
 | `IDENTITY_AUTH_METHODS` | Sign-in methods displayed by the frontend |
 | `IDENTITY_REDIRECT_URI` | Exact Keycloak callback URI |
-| `IDENTITY_ALLOWED_ORIGIN` | Exact browser origin allowed to use the cookie |
+| `IDENTITY_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to use the cookie (`IDENTITY_ALLOWED_ORIGIN` remains a single-origin fallback) |
+| `IDENTITY_COOKIE_SAME_SITE` | `Lax` by default; use `None` with a Secure cookie only for an explicitly allowed cross-site development FE |
 | `DIGIT_USER_SERVICE_URL` / `DIGIT_MDMS_SEARCH_URL` | Existing egov-user and MDMS search endpoints (through Kong) |
 | `DIGIT_ADMIN_USERNAME` / `DIGIT_ADMIN_PASSWORD` / `DIGIT_ADMIN_TENANT_ID` | Dedicated `ACCOUNT_ADMIN` employee for managed-account lifecycle only |
 | `DIGIT_MANAGED_BASE_ROLES` / `DIGIT_MANAGED_ROLE_ALLOWLIST` | Roles of BFF-managed per-tenant accounts |
@@ -99,7 +100,8 @@ Key environment variables:
 | `KEYCLOAK_BFF_AUDIENCE` | BFF client ID | Required audience for BFF access tokens |
 | `IDENTITY_REDIRECT_URI` | `http://localhost:18200/identity/v1/callback` | Exact Keycloak callback URI |
 | `IDENTITY_POST_LOGIN_REDIRECT` | `/` | Fixed browser destination after successful callback |
-| `IDENTITY_ALLOWED_ORIGIN` | `http://localhost:3000` | Browser origin allowed to send the identity cookie |
+| `IDENTITY_ALLOWED_ORIGINS` | `http://localhost:3000` | Browser origins allowed to send the identity cookie |
+| `IDENTITY_COOKIE_SAME_SITE` | `Lax` | Cookie SameSite policy; `None` requires HTTPS/Secure and is intended for cross-site development |
 | `IDENTITY_COOKIE_SECURE` | `true` | Set `false` only for local HTTP development |
 | `DIGIT_USER_HOST` | `http://egov-user:8107` | DIGIT user service |
 | `DIGIT_SYSTEM_USERNAME` | `ADMIN` | System account for forwarding requests |
@@ -287,7 +289,7 @@ not used by the v1 browser route.
 
 The BFF handles `/authorize`, `/callback`, `/session`, `/tenants`, and `/logout`.
 Keycloak access, refresh, and ID tokens remain in Redis; the browser receives
-only an opaque `HttpOnly`, `SameSite=Lax` session cookie. Access tokens refresh
+only an opaque `HttpOnly` session cookie (`SameSite=Lax` by default). Access tokens refresh
 server-side when needed, and logout deletes the Redis session and revokes the
 Keycloak refresh token. Persisted active DIGIT membership still needs to be
 added as a further tenant-options filter before production cutover.

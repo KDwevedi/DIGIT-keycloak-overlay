@@ -103,7 +103,7 @@ function digitFailure(error: unknown, res: express.Response, message: string) {
 
 function trustedWriteOrigin(req: express.Request): boolean {
   const origin = req.get("origin");
-  return !origin || origin === config.identityAllowedOrigin;
+  return !origin || config.identityAllowedOrigins.includes(origin);
 }
 
 export async function currentSession(

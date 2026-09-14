@@ -35,8 +35,9 @@ beforeAll(async () => {
   (config as any).identityRedirectUri =
     "http://localhost:18200/identity/v1/callback";
   (config as any).identityPostLoginRedirect = "/after-login";
-  (config as any).identityAllowedOrigin = "http://localhost:3000";
+  (config as any).identityAllowedOrigins = ["http://localhost:3000", "http://localhost:5173"];
   (config as any).identityCookieSecure = false;
+  (config as any).identityCookieSameSite = "Lax";
   (config as any).identityAuthMethods = [
     { id: "password", label: "Password", type: "password" },
     { id: "google", label: "Google", type: "oauth", idpHint: "google" },
@@ -202,6 +203,14 @@ describe("identity BFF", () => {
       "http://localhost:3000",
     );
     expect(authorize.headers.get("access-control-allow-credentials")).toBe("true");
+
+    const localhost5173 = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/auth-methods`,
+      { headers: { Origin: "http://localhost:5173" } },
+    );
+    expect(localhost5173.headers.get("access-control-allow-origin")).toBe(
+      "http://localhost:5173",
+    );
     const authorizeUrl = new URL(authorize.headers.get("location")!);
     expect(authorizeUrl.origin).toBe("http://localhost:9999");
     expect(authorizeUrl.searchParams.get("client_id")).toBe("digit-identity-bff");

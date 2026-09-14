@@ -42,7 +42,8 @@ confidential BFF client, its browser origin, and the existing DIGIT user service
 ```bash
 export KEYCLOAK_AUDIENCE=digit-ui
 export KEYCLOAK_BFF_CLIENT_SECRET='<same-secret-configured-on-the-bff-client>'
-export IDENTITY_ALLOWED_ORIGIN='http://localhost:3000'
+export IDENTITY_ALLOWED_ORIGINS='http://localhost:3000,http://localhost:5173'
+export IDENTITY_COOKIE_SAME_SITE='None' # only for cross-site dev; requires Secure
 export DIGIT_USER_SERVICE_URL='http://kong:8000/user'
 export DIGIT_MDMS_SEARCH_URL='http://kong:8000/mdms-v2/v1/_search'
 export DIGIT_ADMIN_USERNAME='<dedicated ACCOUNT_ADMIN employee>'

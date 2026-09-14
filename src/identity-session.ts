@@ -167,20 +167,20 @@ export function loginStateFromCookie(cookieHeader?: string): string | null {
 
 export function sessionCookie(sessionId: string, maxAge: number): string {
   const secure = config.identityCookieSecure ? "; Secure" : "";
-  return `${config.identityCookieName}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  return `${config.identityCookieName}=${sessionId}; Path=/; HttpOnly; SameSite=${config.identityCookieSameSite}; Max-Age=${maxAge}${secure}`;
 }
 
 export function clearedSessionCookie(): string {
   const secure = config.identityCookieSecure ? "; Secure" : "";
-  return `${config.identityCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+  return `${config.identityCookieName}=; Path=/; HttpOnly; SameSite=${config.identityCookieSameSite}; Max-Age=0${secure}`;
 }
 
 export function loginCookie(state: string): string {
   const secure = config.identityCookieSecure ? "; Secure" : "";
-  return `${config.identityCookieName}_login=${state}; Path=/identity/v1/callback; HttpOnly; SameSite=Lax; Max-Age=${config.identityLoginTtlSeconds}${secure}`;
+  return `${config.identityCookieName}_login=${state}; Path=/identity/v1/callback; HttpOnly; SameSite=${config.identityCookieSameSite}; Max-Age=${config.identityLoginTtlSeconds}${secure}`;
 }
 
 export function clearedLoginCookie(): string {
   const secure = config.identityCookieSecure ? "; Secure" : "";
-  return `${config.identityCookieName}_login=; Path=/identity/v1/callback; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+  return `${config.identityCookieName}_login=; Path=/identity/v1/callback; HttpOnly; SameSite=${config.identityCookieSameSite}; Max-Age=0${secure}`;
 }

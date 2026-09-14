@@ -36,7 +36,9 @@ password.
 
 Password, magic link, Google, and GitHub all enter the same Keycloak browser
 flow (brokered methods use `kc_idp_hint`) and converge on one callback. Keycloak
-tokens stay in Redis behind a random `HttpOnly; Secure; SameSite=Lax` cookie.
+tokens stay in Redis behind a random HttpOnly cookie. `SameSite=Lax` is the
+default; a cross-site development frontend may set `IDENTITY_COOKIE_SAME_SITE=None`
+with a Secure cookie and an explicit `IDENTITY_ALLOWED_ORIGINS` entry.
 
 `contexts/_select` response:
 
