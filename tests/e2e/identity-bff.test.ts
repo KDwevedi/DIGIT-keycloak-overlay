@@ -24,8 +24,11 @@ beforeAll(async () => {
   (config as any).digitIdentityServiceUrl =
     "http://localhost:9999/internal/identity/v1";
   (config as any).digitIdentityServiceToken = "test-identity-workload";
+  (config as any).digitIdentityAssertionAudience = "digit-identity-exchange";
   (config as any).digitAccessTokenMaxTtlSeconds = 900;
   (config as any).identityControlPlaneToken = "test-control-plane";
+  (config as any).identitySessionIntrospectionToken = "test-session-introspection";
+  (config as any).identityReconciliationLeaseSeconds = 30;
   (config as any).keycloakOrganizationRealm = "digit-sandbox";
   (config as any).keycloakAllowedOrganizationRoleClients = ["digit-ui"];
   (config as any).organizationTenantMappings = [
@@ -84,6 +87,7 @@ describe("identity BFF", () => {
         body: JSON.stringify({
           organizationId: organization.id,
           userId: "identity-user-1",
+          digitUserUuid: "digit-user-1",
         }),
       });
       expect(membership.status).toBe(204);
@@ -108,6 +112,18 @@ describe("identity BFF", () => {
     expect((await (await ensureRoles()).json()).assignment.roles).toEqual([
       "TENANT_ADMIN",
     ]);
+
+    const reconciliation = await fetch(`${base}/reconciliation/_run`, {
+      method: "POST",
+      headers,
+    });
+    expect(reconciliation.status).toBe(200);
+    expect(await reconciliation.json()).toMatchObject({
+      acquired: true,
+      organizations: 1,
+      activated: 1,
+      failures: [],
+    });
   });
 
   it("exposes configured methods and rejects unknown methods", async () => {
@@ -201,6 +217,28 @@ describe("identity BFF", () => {
         name: "Demo Person",
       },
       context: null,
+    });
+
+    const introspection = await fetch(
+      `http://localhost:${getAppPort()}/internal/identity/v1/sessions/_introspect`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-session-introspection",
+          Cookie: cookie,
+        },
+      },
+    );
+    expect(introspection.status).toBe(200);
+    expect(await introspection.json()).toEqual({
+      active: true,
+      identity: {
+        issuer: getIssuer(),
+        subject: "identity-user-1",
+        email: "person@example.com",
+        name: "Demo Person",
+        preferredUsername: "demo.person",
+      },
     });
 
     const tenants = await fetch(

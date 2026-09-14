@@ -4,6 +4,7 @@ set -euo pipefail
 readonly REALM=ke
 readonly KC_CONFIG=/tmp/identity-bff-kcadm.config
 readonly BFF_CLIENT=digit-identity-bff
+readonly ASSERTION_AUDIENCE=digit-identity-exchange
 readonly ADMIN_CLIENT=digit-identity-admin
 
 set -a
@@ -79,11 +80,27 @@ kc update "clients/$bff_uuid" -r "$REALM" \
   -s standardFlowEnabled=true \
   -s "redirectUris=[\"$IDENTITY_REDIRECT_URI\"]" \
   -s "webOrigins=[\"$IDENTITY_ALLOWED_ORIGIN\"]" \
-  -s 'attributes."pkce.code.challenge.method"=S256' >/dev/null
+  -s 'attributes."pkce.code.challenge.method"=S256' \
+  -s 'attributes."standard.token.exchange.enabled"=true' >/dev/null
+
+assertion_uuid=$(client_uuid "$ASSERTION_AUDIENCE")
+if [ -z "$assertion_uuid" ]; then
+  kc create clients -r "$REALM" \
+    -s "clientId=$ASSERTION_AUDIENCE" \
+    -s enabled=true -s bearerOnly=true \
+    -s standardFlowEnabled=false \
+    -s directAccessGrantsEnabled=false >/dev/null
+fi
 
 ensure_mapper "clients/$bff_uuid" digit-identity-bff-audience \
   oidc-audience-mapper \
   -s "config.\"included.client.audience\"=$BFF_CLIENT" \
+  -s 'config."id.token.claim"=false' \
+  -s 'config."access.token.claim"=true'
+
+ensure_mapper "clients/$bff_uuid" digit-identity-exchange-audience \
+  oidc-audience-mapper \
+  -s "config.\"included.client.audience\"=$ASSERTION_AUDIENCE" \
   -s 'config."id.token.claim"=false' \
   -s 'config."access.token.claim"=true'
 

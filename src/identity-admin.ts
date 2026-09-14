@@ -19,6 +19,16 @@ interface RoleRepresentation {
   name: string;
 }
 
+interface UserRepresentation {
+  id?: string;
+}
+
+export interface OrganizationReconciliationState {
+  organizationId: string;
+  enabled: boolean;
+  memberRoles: Map<string, string[]>;
+}
+
 export class IdentityAdminError extends Error {
   constructor(message: string, readonly status = 502) {
     super(message);
@@ -81,6 +91,17 @@ async function request(
     );
   }
   return response;
+}
+
+async function paged<T>(path: string): Promise<T[]> {
+  const values: T[] = [];
+  for (let first = 0; ; first += 100) {
+    const separator = path.includes("?") ? "&" : "?";
+    const response = await request(`${path}${separator}first=${first}&max=100`);
+    const page = await response.json() as T[];
+    values.push(...page);
+    if (page.length < 100) return values;
+  }
 }
 
 function mappedTenant(organization: OrganizationRepresentation): string | null {
@@ -265,4 +286,62 @@ export async function ensureOrganizationRoleAssignment(input: {
     });
   }
   return { groupId: group.id, roles: desired.map((role) => role.name).sort() };
+}
+
+export async function readOrganizationReconciliation(
+  organizationId: string,
+  roleClientId: string,
+): Promise<OrganizationReconciliationState | null> {
+  if (!config.keycloakAllowedOrganizationRoleClients.includes(roleClientId)) {
+    throw new IdentityAdminError("Keycloak client is not allowed for Organization roles", 400);
+  }
+  let organization: OrganizationRepresentation;
+  try {
+    const response = await request(`/organizations/${encodeURIComponent(organizationId)}`);
+    organization = await response.json() as OrganizationRepresentation;
+  } catch (error) {
+    if (error instanceof IdentityAdminError && error.status === 404) return null;
+    throw error;
+  }
+
+  const members = await paged<UserRepresentation>(
+    `/organizations/${encodeURIComponent(organizationId)}/members`,
+  );
+  const memberRoles = new Map<string, Set<string>>();
+  for (const member of members) {
+    if (member.id) memberRoles.set(member.id, new Set());
+  }
+  if (organization.enabled === false) {
+    return { organizationId, enabled: false, memberRoles: new Map() };
+  }
+
+  const uuid = await clientUuid(roleClientId);
+  const groups = await paged<GroupRepresentation>(
+    `/organizations/${encodeURIComponent(organizationId)}/groups`,
+  );
+  for (const group of groups) {
+    const mappingPath =
+      `/organizations/${encodeURIComponent(organizationId)}` +
+      `/groups/${encodeURIComponent(group.id)}/role-mappings/clients/${encodeURIComponent(uuid)}`;
+    const rolesResponse = await request(mappingPath);
+    const roles = await rolesResponse.json() as RoleRepresentation[];
+    if (roles.length === 0) continue;
+    const groupMembers = await paged<UserRepresentation>(
+      `/organizations/${encodeURIComponent(organizationId)}` +
+      `/groups/${encodeURIComponent(group.id)}/members`,
+    );
+    for (const member of groupMembers) {
+      if (!member.id || !memberRoles.has(member.id)) continue;
+      const desired = memberRoles.get(member.id)!;
+      for (const role of roles) desired.add(role.name);
+    }
+  }
+  return {
+    organizationId,
+    enabled: true,
+    memberRoles: new Map([...memberRoles].map(([subject, roles]) => [
+      subject,
+      [...roles].sort(),
+    ])),
+  };
 }

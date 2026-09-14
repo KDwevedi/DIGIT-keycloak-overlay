@@ -136,6 +136,16 @@ export const config = {
   ),
   identityControlPlaneToken:
     process.env.IDENTITY_CONTROL_PLANE_TOKEN || "",
+  identitySessionIntrospectionToken:
+    process.env.IDENTITY_SESSION_INTROSPECTION_TOKEN || "",
+  identityReconcileOnStartup:
+    process.env.IDENTITY_RECONCILE_ON_STARTUP === "true",
+  identityReconciliationLeaseSeconds: parseInt(
+    process.env.IDENTITY_RECONCILIATION_LEASE_SECONDS || "300",
+  ),
+  identityReconciliationIntervalSeconds: parseInt(
+    process.env.IDENTITY_RECONCILIATION_INTERVAL_SECONDS || "0",
+  ),
 
   // Durable DIGIT identity/membership/session API. This is deliberately not
   // a PGR URL: PGR is a control-plane caller, never an identity dependency.
@@ -145,6 +155,8 @@ export const config = {
     process.env.DIGIT_IDENTITY_SERVICE_TOKEN || "",
   digitIdentityClientId:
     process.env.DIGIT_IDENTITY_CLIENT_ID || "digit-ui",
+  digitIdentityAssertionAudience:
+    process.env.DIGIT_IDENTITY_ASSERTION_AUDIENCE || "digit-identity-exchange",
   digitIdentityTimeoutMs: parseInt(
     process.env.DIGIT_IDENTITY_TIMEOUT_MS || "5000",
   ),

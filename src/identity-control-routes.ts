@@ -7,6 +7,13 @@ import {
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
 } from "./identity-admin.js";
+import { currentSession } from "./identity-routes.js";
+import {
+  ensureDigitOrganization,
+  ensureDigitSubject,
+  reconcileDigitMembership,
+} from "./digit-identity.js";
+import { runIdentityReconciliation } from "./identity-reconciliation.js";
 
 function asyncRoute(
   handler: (req: express.Request, res: express.Response) => Promise<unknown>,
@@ -37,14 +44,18 @@ function handleAdminError(error: unknown, res: express.Response) {
 export function registerIdentityControlRoutes(app: express.Application): void {
   app.use("/internal/identity/v1", (req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
-    if (!config.identityControlPlaneToken) {
+    const introspection = req.path === "/sessions/_introspect";
+    const expected = introspection
+      ? config.identitySessionIntrospectionToken
+      : config.identityControlPlaneToken;
+    if (!expected) {
       return res.status(503).json({ error: "Identity control plane is not configured" });
     }
     const authorization = req.get("authorization") || "";
     const supplied = authorization.startsWith("Bearer ")
       ? authorization.slice(7)
       : "";
-    if (!supplied || !sameSecret(supplied, config.identityControlPlaneToken)) {
+    if (!supplied || !sameSecret(supplied, expected)) {
       return res.status(401).json({ error: "Invalid workload credential" });
     }
     next();
@@ -59,17 +70,47 @@ export function registerIdentityControlRoutes(app: express.Application): void {
         throw new IdentityAdminError("alias is invalid", 400);
       }
       const organization = await ensureOrganization({ tenantId, alias, name });
+      await ensureDigitOrganization({
+        organizationId: organization.id,
+        alias,
+        tenantId,
+        name,
+      });
       return res.json({ organization });
     } catch (error) {
       return handleAdminError(error, res);
     }
   }));
 
+  app.post("/internal/identity/v1/sessions/_introspect", asyncRoute(async (req, res) => {
+    const current = await currentSession(req.headers.cookie);
+    if (!current) {
+      return res.status(401).json({ error: "Invalid or missing identity session" });
+    }
+    const { claims } = current.session;
+    return res.json({
+      active: true,
+      identity: {
+        issuer: config.keycloakIssuer,
+        subject: claims.sub,
+        email: claims.email,
+        name: claims.name,
+        preferredUsername: claims.preferred_username,
+      },
+    });
+  }));
+
   app.post("/internal/identity/v1/memberships/_ensure", asyncRoute(async (req, res) => {
     try {
       const organizationId = requiredString(req.body?.organizationId, "organizationId");
       const userId = requiredString(req.body?.userId, "userId");
+      const digitUserUuid = requiredString(req.body?.digitUserUuid, "digitUserUuid");
       await ensureOrganizationMembership({ organizationId, userId });
+      await ensureDigitSubject({
+        issuer: config.keycloakIssuer,
+        subject: userId,
+        digitUserUuid,
+      });
       return res.status(204).end();
     } catch (error) {
       return handleAdminError(error, res);
@@ -96,9 +137,20 @@ export function registerIdentityControlRoutes(app: express.Application): void {
         clientId,
         roles,
       });
+      await reconcileDigitMembership({
+        issuer: config.keycloakIssuer,
+        subject: userId,
+        organizationId,
+        roles,
+      });
       return res.json({ assignment });
     } catch (error) {
       return handleAdminError(error, res);
     }
+  }));
+
+  app.post("/internal/identity/v1/reconciliation/_run", asyncRoute(async (_req, res) => {
+    const result = await runIdentityReconciliation();
+    return res.status(result.acquired ? 200 : 202).json(result);
   }));
 }

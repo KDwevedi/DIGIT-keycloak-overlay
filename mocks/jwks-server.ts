@@ -67,6 +67,13 @@ export async function signJwt(
 export function createJwksApp() {
   const app = express();
   app.use(express.json());
+  const digitOrganizations = new Map<string, Record<string, unknown>>();
+  const digitMemberships = new Map<string, {
+    issuer: string;
+    subject: string;
+    organizationId: string;
+    active: boolean;
+  }>();
   app.get(
     "/realms/digit-sandbox/protocol/openid-connect/certs",
     (_req, res) => {
@@ -87,26 +94,41 @@ export function createJwksApp() {
         : "";
       const validGrant = grantType === "authorization_code"
         ? Boolean(nonce) && Boolean(req.body.code_verifier)
-        : grantType === "refresh_token" && req.body.refresh_token === "refresh-1";
+        : grantType === "refresh_token"
+          ? req.body.refresh_token === "refresh-1"
+          : grantType === "urn:ietf:params:oauth:grant-type:token-exchange" &&
+            Boolean(req.body.subject_token) &&
+            req.body.audience === "digit-identity-exchange" &&
+            (req.body.scope === "organization:bomet" ||
+              req.body.scope === "organization:kisumu");
       if (!validClient || !validGrant) {
         return res.status(400).json({ error: "invalid_grant" });
       }
 
+      const selectedAlias = grantType ===
+        "urn:ietf:params:oauth:grant-type:token-exchange"
+        ? String(req.body.scope).slice("organization:".length)
+        : null;
+      const organizations = {
+        bomet: {
+          id: "org-bomet-id",
+          realm_access: { roles: ["TENANT_ADMIN"] },
+        },
+        kisumu: {
+          id: "org-kisumu-id",
+          realm_access: { roles: ["VIEWER"] },
+        },
+      };
       const accessToken = await signJwt({
         sub: "identity-user-1",
         email: "person@example.com",
         name: "Demo Person",
-        aud: "digit-identity-bff",
-        organization: {
-          bomet: {
-            id: "org-bomet-id",
-            realm_access: { roles: ["TENANT_ADMIN"] },
-          },
-          kisumu: {
-            id: "org-kisumu-id",
-            realm_access: { roles: ["VIEWER"] },
-          },
-        },
+        preferred_username: "demo.person",
+        azp: "digit-identity-bff",
+        aud: selectedAlias ? "digit-identity-exchange" : "digit-identity-bff",
+        organization: selectedAlias
+          ? { [selectedAlias]: organizations[selectedAlias as keyof typeof organizations] }
+          : organizations,
       });
       const idToken = await signJwt({
         sub: "identity-user-1",
@@ -167,14 +189,58 @@ export function createJwksApp() {
     return res.json({ contexts });
   });
 
-  app.post("/internal/identity/v1/sessions/_issue", requireWorkload, (req, res) => {
+  app.post("/internal/identity/v1/organizations/_ensure", requireWorkload, (req, res) => {
+    digitOrganizations.set(req.body?.organizationId, {
+      ...req.body,
+      active: true,
+    });
+    return res.json({ tenantId: req.body?.tenantId });
+  });
+
+  app.post("/internal/identity/v1/subjects/_ensure", requireWorkload, (req, res) => {
+    return res.json({ digitUserUuid: req.body?.digitUserUuid });
+  });
+
+  app.post("/internal/identity/v1/memberships/_reconcile", requireWorkload, (req, res) => {
+    const key = `${req.body?.organizationId}:${req.body?.issuer}:${req.body?.subject}`;
+    digitMemberships.set(key, {
+      issuer: req.body?.issuer,
+      subject: req.body?.subject,
+      organizationId: req.body?.organizationId,
+      active: req.body?.active !== false,
+    });
+    return res.json({ membershipId: "membership-1" });
+  });
+
+  app.post("/internal/identity/v1/reconciliation/_snapshot", requireWorkload, (_req, res) => {
+    return res.json({
+      organizations: [...digitOrganizations.values()].map((organization) => ({
+        ...organization,
+        members: [...digitMemberships.values()].filter(
+          (member) => member.organizationId === organization.organizationId,
+        ),
+      })),
+    });
+  });
+
+  app.post("/internal/identity/v1/sessions/_exchange", (req, res) => {
+    const assertion = req.get("authorization")?.replace(/^Bearer /, "");
+    if (!assertion) return res.status(401).json({ error: "missing assertion" });
+    const payload = JSON.parse(
+      Buffer.from(assertion.split(".")[1], "base64url").toString("utf8"),
+    );
     const context = req.body?.context;
     const rolesByTenant: Record<string, string[]> = {
       "ke.bomet": ["TENANT_ADMIN"],
       "ke.kisumu": ["VIEWER"],
     };
     const roleCodes = rolesByTenant[context?.tenantId];
-    if (!roleCodes || req.body?.identity?.subject !== "identity-user-1") {
+    const organization = payload.organization || {};
+    const aliases = Object.keys(organization);
+    const selectedAlias = context?.tenantId === "ke.bomet" ? "bomet" : "kisumu";
+    if (!roleCodes || payload.sub !== "identity-user-1" ||
+        payload.aud !== "digit-identity-exchange" ||
+        aliases.length !== 1 || aliases[0] !== selectedAlias) {
       return res.status(403).json({ error: "not eligible" });
     }
     return res.json({

@@ -47,8 +47,10 @@ and immutable Organization IDs.
 
 - `POST /contexts/_resolve` returns active Organization-to-tenant contexts and
   tenant-local roles.
-- `POST /sessions/_issue` returns a short-lived DIGIT login response for one
-  revalidated context.
+- `POST /sessions/_exchange` accepts only a Keycloak Standard Token Exchange
+  assertion whose audience is `digit-identity-exchange` and whose signed claim
+  contains exactly one Organization. It returns a short-lived DIGIT employee
+  login response for the matching durable context.
 
 This API is the authority for durable account and membership state. Keycloak
 claims alone never create a DIGIT session.
@@ -60,15 +62,31 @@ still uses the public value.
 
 ## Control-plane API
 
-All routes are protected by `IDENTITY_CONTROL_PLANE_TOKEN` and are idempotent:
+Provisioning routes are protected by `IDENTITY_CONTROL_PLANE_TOKEN` and are
+idempotent:
 
 - `POST /internal/identity/v1/organizations/_ensure`
 - `POST /internal/identity/v1/memberships/_ensure`
 - `POST /internal/identity/v1/role-assignments/_ensure`
+- `POST /internal/identity/v1/reconciliation/_run`
+
+PGR authenticates an onboarding founder through the narrower session endpoint:
+
+- `POST /internal/identity/v1/sessions/_introspect`
+
+That route has its own `IDENTITY_SESSION_INTROSPECTION_TOKEN`; its credential
+cannot provision Organizations, memberships, or roles.
 
 An onboarding workflow calls these after its durable writes succeed. A startup
-or scheduled reconciliation worker can call the same routes from its own source
-of desired state. Neither mode gives PGR Keycloak admin credentials.
+reconciliation pass can also be enabled with
+`IDENTITY_RECONCILE_ON_STARTUP=true`. The pass takes a short Redis lease so only
+one BFF replica runs it, reads the server-owned DIGIT Organization mappings,
+compares Keycloak Organization/group membership, and projects activations,
+role changes, and removals through the same egov-user API. Neither mode gives
+PGR Keycloak admin credentials.
+
+Set `IDENTITY_RECONCILIATION_INTERVAL_SECONDS` to run the same leased repair
+periodically; `0` (the default) disables the timer.
 
 Roles are client roles assigned through a group inside an Organization. The
 role-assignment route accepts only clients in
@@ -78,6 +96,11 @@ set exact.
 Set `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a
 dedicated Keycloak service account. Password-grant admin configuration remains
 only as a migration fallback and should not be used for a new deployment.
+
+The corresponding egov-user workload endpoints link only existing employee
+records. They never create a shadow user or generated password. The browser
+session exchange is separately authorized by the signed, audience-limited
+Keycloak assertion rather than either workload token.
 
 ## Failure behavior
 

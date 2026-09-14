@@ -42,6 +42,10 @@ export IDENTITY_ALLOWED_ORIGIN='http://localhost:3000'
 export DIGIT_IDENTITY_SERVICE_URL='http://digit-identity:8080/internal/identity/v1'
 export DIGIT_IDENTITY_SERVICE_TOKEN='<workload-token>'
 export IDENTITY_CONTROL_PLANE_TOKEN='<different-workload-token>'
+export IDENTITY_SESSION_INTROSPECTION_TOKEN='<pgr-session-only-token>'
+export DIGIT_IDENTITY_ASSERTION_AUDIENCE='digit-identity-exchange'
+export IDENTITY_RECONCILE_ON_STARTUP='true'
+export IDENTITY_RECONCILIATION_INTERVAL_SECONDS='3600'
 ```
 
 Browser API:
@@ -67,11 +71,14 @@ Internal control-plane API (workload bearer token required):
 POST /internal/identity/v1/organizations/_ensure
 POST /internal/identity/v1/memberships/_ensure
 POST /internal/identity/v1/role-assignments/_ensure
+POST /internal/identity/v1/reconciliation/_run
+POST /internal/identity/v1/sessions/_introspect
 ```
 
-These idempotent routes are suitable for PGR onboarding, another domain's
-onboarding, or a startup/scheduled reconciliation worker. They contain no PGR
-model or URL.
+The three ensure routes are suitable for PGR onboarding, another domain's
+onboarding, or a startup/scheduled reconciliation worker. Session introspection
+uses a separate, narrower credential so PGR never receives Keycloak admin
+authority. These routes contain no PGR model or URL.
 
 ### Run Tests (requires Redis)
 
@@ -162,7 +169,12 @@ keycloak/
   cookie, while the BFF manages Keycloak access/refresh token lifetime in Redis
 - **PGR-independent control plane**: idempotent ensure operations can be driven
   by PGR, any other onboarding workflow, or reconciliation
-- **System token**: Uses `INTERNAL_MICROSERVICE_ROLE` to forward requests, no shadow passwords
-- **Lazy provisioning**: DIGIT users created on first API call, not at signup
-- **Content-type-aware proxy**: JSON bodies get RequestInfo rewritten, multipart streams through
-- **Hash-derived mobile**: `90000XXXXX` from SHA256 of Keycloak subject UUID
+- **Assertion exchange**: Keycloak Standard Token Exchange narrows the logged-in
+  identity to one Organization and the `digit-identity-exchange` audience before
+  egov-user mints a normal employee DIGIT token
+- **No shadow identity**: control-plane calls link a Keycloak subject to an
+  existing DIGIT employee; they do not fabricate users, passwords, or mobile
+  numbers
+- **Legacy executable retained during migration**: the older generic reverse
+  proxy still has its own system-token/lazy-provisioning code and tests, but the
+  standalone identity BFF does not use that path

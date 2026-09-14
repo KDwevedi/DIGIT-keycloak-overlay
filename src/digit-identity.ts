@@ -9,6 +9,21 @@ interface OrganizationMembership {
   organizationAlias: string;
 }
 
+export interface DigitReconciliationMember {
+  issuer: string;
+  subject: string;
+  active: boolean;
+}
+
+export interface DigitReconciliationOrganization {
+  organizationId: string;
+  organizationAlias: string;
+  tenantId: string;
+  name: string;
+  active: boolean;
+  members: DigitReconciliationMember[];
+}
+
 function endpoint(path: string): string {
   const base = config.digitIdentityServiceUrl.replace(/\/$/, "");
   if (!base) {
@@ -30,6 +45,41 @@ async function post(path: string, body: unknown): Promise<Record<string, unknown
     response = await fetch(endpoint(path), {
       method: "POST",
       headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(config.digitIdentityTimeoutMs),
+    });
+  } catch (error) {
+    throw new DigitIdentityUnavailableError(
+      `DIGIT identity service request failed: ${(error as Error).message}`,
+    );
+  }
+  if (!response.ok) {
+    throw new DigitIdentityUnavailableError(
+      `DIGIT identity service returned ${response.status}`,
+    );
+  }
+  try {
+    return await response.json() as Record<string, unknown>;
+  } catch {
+    throw new DigitIdentityUnavailableError(
+      "DIGIT identity service returned invalid JSON",
+    );
+  }
+}
+
+async function postAssertion(
+  path: string,
+  assertion: string,
+  body: unknown,
+): Promise<Record<string, unknown>> {
+  let response: Response;
+  try {
+    response = await fetch(endpoint(path), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${assertion}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(config.digitIdentityTimeoutMs),
     });
@@ -120,12 +170,50 @@ export async function resolveActiveTenantOptions(
   return contexts.sort((left, right) => left.name.localeCompare(right.name));
 }
 
+export async function ensureDigitOrganization(input: {
+  organizationId: string;
+  alias: string;
+  tenantId: string;
+  name: string;
+}): Promise<void> {
+  await post("/organizations/_ensure", input);
+}
+
+export async function ensureDigitSubject(input: {
+  issuer: string;
+  subject: string;
+  digitUserUuid: string;
+}): Promise<void> {
+  await post("/subjects/_ensure", input);
+}
+
+export async function reconcileDigitMembership(input: {
+  issuer: string;
+  subject: string;
+  organizationId: string;
+  roles: string[];
+  active?: boolean;
+}): Promise<void> {
+  await post("/memberships/_reconcile", input);
+}
+
+export async function digitReconciliationSnapshot(): Promise<
+  DigitReconciliationOrganization[]
+> {
+  const result = await post("/reconciliation/_snapshot", {});
+  if (!Array.isArray(result.organizations)) {
+    throw new DigitIdentityUnavailableError(
+      "DIGIT identity service returned an invalid reconciliation snapshot",
+    );
+  }
+  return result.organizations as DigitReconciliationOrganization[];
+}
+
 export async function issueDigitContext(
-  claims: KCClaims,
+  assertion: string,
   context: TenantOption,
 ): Promise<DigitLoginResponse> {
-  const result = await post("/sessions/_issue", {
-    identity: identity(claims),
+  const result = await postAssertion("/sessions/_exchange", assertion, {
     clientId: config.digitIdentityClientId,
     context: {
       organizationId: context.organizationId,

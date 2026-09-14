@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import {
   authorizationUrl,
   exchangeAuthorizationCode,
+  exchangeIdentityAssertion,
   logoutFromKeycloak,
   refreshIdentityTokens,
   verifyIdentityAccessToken,
@@ -51,7 +52,7 @@ function trustedWriteOrigin(req: express.Request): boolean {
   return !origin || origin === config.identityAllowedOrigin;
 }
 
-async function currentSession(
+export async function currentSession(
   cookieHeader?: string,
 ): Promise<{ sessionId: string; session: IdentitySession } | null> {
   const sessionId = sessionIdFromCookie(cookieHeader);
@@ -227,7 +228,11 @@ export function registerIdentityRoutes(app: express.Application): void {
       if (!selected) {
         return res.status(403).json({ error: "Tenant context is not available" });
       }
-      const digitSession = await issueDigitContext(current.session.claims, selected);
+      const assertion = await exchangeIdentityAssertion(
+        current.session.accessToken,
+        selected.organizationAlias,
+      );
+      const digitSession = await issueDigitContext(assertion, selected);
       const saved = await saveSelectedIdentityContext(current.sessionId, {
         organizationId: selected.organizationId,
         organizationAlias: selected.organizationAlias,

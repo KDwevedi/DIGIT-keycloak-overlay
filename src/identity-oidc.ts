@@ -99,6 +99,21 @@ export function refreshIdentityTokens(
   }));
 }
 
+export async function exchangeIdentityAssertion(
+  subjectToken: string,
+  organizationAlias: string,
+): Promise<string> {
+  const tokens = await tokenRequest(new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+    subject_token: subjectToken,
+    subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
+    requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+    audience: config.digitIdentityAssertionAudience,
+    scope: `organization:${organizationAlias}`,
+  }));
+  return tokens.accessToken;
+}
+
 export async function verifyIdentityAccessToken(
   accessToken: string,
 ): Promise<KCClaims> {

@@ -364,6 +364,12 @@ export function createKcAdminMock() {
     res.status(204).end();
   });
 
+  app.get("/admin/realms/:realm/organizations/:organizationId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    return organization ? res.json(organization) : res.status(404).json({ error: "not found" });
+  });
+
   app.post("/admin/realms/:realm/organizations/:organizationId/members", (req, res) => {
     const realm = getOrCreateRealm(req.params.realm);
     const organization = realm.organizations.get(req.params.organizationId);
@@ -371,6 +377,15 @@ export function createKcAdminMock() {
     if (organization.members.has(req.body)) return res.status(409).end();
     organization.members.add(req.body);
     res.status(201).end();
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId/members", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const first = Number(req.query.first || 0);
+    const max = Number(req.query.max || 100);
+    res.json([...organization.members].slice(first, first + max).map((id) => ({ id })));
   });
 
   app.get("/admin/realms/:realm/organizations/:organizationId/groups", (req, res) => {
@@ -412,6 +427,19 @@ export function createKcAdminMock() {
       members.add(req.params.userId);
       organization.groupMembers.set(req.params.groupId, members);
       res.status(204).end();
+    },
+  );
+
+  app.get(
+    "/admin/realms/:realm/organizations/:organizationId/groups/:groupId/members",
+    (req, res) => {
+      const realm = getOrCreateRealm(req.params.realm);
+      const organization = realm.organizations.get(req.params.organizationId);
+      if (!organization) return res.status(404).json({ error: "not found" });
+      const first = Number(req.query.first || 0);
+      const max = Number(req.query.max || 100);
+      const members = [...(organization.groupMembers.get(req.params.groupId) || new Set())];
+      res.json(members.slice(first, first + max).map((id) => ({ id })));
     },
   );
 
