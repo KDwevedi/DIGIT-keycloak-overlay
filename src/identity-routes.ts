@@ -27,6 +27,7 @@ import {
 import { DigitUnavailableError } from "./digit-user-service.js";
 import {
   desiredRoles,
+  liveMembershipsForSubject,
   membershipsFromClaims,
   tenantOptions,
   type TenantOption,
@@ -61,10 +62,13 @@ function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOpti
  * here: session claims can be stale, so role projection comes only from live
  * Keycloak state through the control plane and reconciliation.
  */
-async function resolveTenantContexts(claims: KCClaims): Promise<TenantOption[]> {
-  const memberships = await membershipsFromClaims(claims);
+async function resolveTenantContexts(claims: KCClaims, live = false): Promise<TenantOption[]> {
+  const signedMemberships = await membershipsFromClaims(claims);
+  const memberships = live
+    ? await liveMembershipsForSubject(claims.sub)
+    : signedMemberships;
   const identity = managedIdentity(config.keycloakIssuer, claims.sub);
-  const { account } = await ensureManagedAccount(identity, desiredRoles(memberships), {
+  const { account } = await ensureManagedAccount(identity, desiredRoles(signedMemberships), {
     name: claims.name || claims.preferred_username || "",
     emailId: claims.email_verified ? claims.email : undefined,
     mobileNumber: claims.phone_number,
@@ -90,14 +94,13 @@ function trustedWriteOrigin(req: express.Request): boolean {
 
 export async function currentSession(
   cookieHeader?: string,
-  forceRefresh = false,
 ): Promise<{ sessionId: string; session: IdentitySession } | null> {
   const sessionId = sessionIdFromCookie(cookieHeader);
   if (!sessionId) return null;
   let session = await getIdentitySession(sessionId);
   if (!session) return null;
 
-  if (!forceRefresh && session.accessExpiresAt > Date.now() + 30_000) {
+  if (session.accessExpiresAt > Date.now() + 30_000) {
     return { sessionId, session };
   }
   if (!session.refreshToken ||
@@ -230,14 +233,14 @@ export function registerIdentityRoutes(app: express.Application): void {
   }));
 
   app.get("/identity/v1/tenants", asyncRoute(async (req, res) => {
-    // Organization membership may have changed during onboarding. Refresh the
-    // server-side Keycloak token so the same browser session sees it immediately.
-    const current = await currentSession(req.headers.cookie, true);
+    const current = await currentSession(req.headers.cookie);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
     try {
-      const tenants = await resolveTenantContexts(current.session.claims);
+      // Use live membership because onboarding can add an Organization after
+      // this browser session's access token was issued.
+      const tenants = await resolveTenantContexts(current.session.claims, true);
       return res.json({
         tenants: tenants.map(publicTenant),
         selectionRequired: tenants.length > 1,
@@ -252,9 +255,7 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (!trustedWriteOrigin(req)) {
       return res.status(403).json({ error: "Untrusted request origin" });
     }
-    // Refresh before selection for the same reason as /tenants: a newly
-    // provisioned Organization must not require the user to sign in again.
-    const current = await currentSession(req.headers.cookie, true);
+    const current = await currentSession(req.headers.cookie);
     if (!current) {
       return res.status(401).json({ error: "Invalid or missing identity session" });
     }
@@ -264,7 +265,7 @@ export function registerIdentityRoutes(app: express.Application): void {
     if (!tenantId) return res.status(400).json({ error: "tenantId is required" });
 
     try {
-      const tenants = await resolveTenantContexts(current.session.claims);
+      const tenants = await resolveTenantContexts(current.session.claims, true);
       const selected = tenants.find((tenant) => tenant.tenantId === tenantId);
       if (!selected) {
         return res.status(403).json({ error: "Tenant context is not available" });

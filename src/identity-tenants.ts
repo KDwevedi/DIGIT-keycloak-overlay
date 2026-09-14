@@ -1,5 +1,10 @@
 import { config } from "./config.js";
-import { readOrganizationMapping, type OrganizationMapping } from "./identity-admin.js";
+import {
+  isOrganizationMember,
+  listOrganizationMappings,
+  readOrganizationMapping,
+  type OrganizationMapping,
+} from "./identity-admin.js";
 import { DigitUnavailableError, type DigitAccount } from "./digit-user-service.js";
 import type { DesiredRoles } from "./managed-digit-users.js";
 import type { KCClaims } from "./types.js";
@@ -90,6 +95,18 @@ export async function membershipsFromClaims(claims: KCClaims): Promise<Organizat
     result.push({ ...mapping, roles: allowlisted(access?.roles) });
   }
   return result.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/** Live memberships for flows, such as onboarding, that mutate Organizations mid-session. */
+export async function liveMembershipsForSubject(subject: string): Promise<OrganizationMembership[]> {
+  const memberships = await Promise.all((await listOrganizationMappings()).map(async (mapping) =>
+    await isActiveDigitTenant(mapping.tenantId) &&
+    await isOrganizationMember(mapping.organizationId, subject)
+      ? { ...mapping, roles: [] as string[] }
+      : null));
+  return memberships
+    .filter((membership): membership is OrganizationMembership => membership !== null)
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function desiredRoles(memberships: Array<{ tenantId: string; roles: string[] }>): DesiredRoles {

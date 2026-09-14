@@ -11,6 +11,7 @@ import {
 const digit = createFakeDigitUser({
   tenants: ["ke", "ke.bomet", "ke.kisumu", "ke.nakuru", "ke.nyeri"],
 });
+let nakuruOrganizationId = "";
 
 async function kcAdmin(path: string, body: unknown): Promise<Response> {
   return fetch(`${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}${path}`, {
@@ -105,6 +106,7 @@ describe("identity BFF", () => {
       return (await response.json()).organization.id as string;
     };
     const nakuru = await ensureOrganization("ke.nakuru", "nakuru");
+    nakuruOrganizationId = nakuru;
     expect(await ensureOrganization("ke.nakuru", "nakuru")).toBe(nakuru);
 
     const created = await kcAdmin("/users", {
@@ -374,6 +376,21 @@ describe("identity BFF", () => {
     expect((await staleClaims.json()).tenants.map((tenant: { tenantId: string }) => tenant.tenantId))
       .toEqual(["ke.bomet"]);
     expect(managedAccount.roles.some((role) => role.tenantId === "ke.kisumu")).toBe(false);
+    managedAccount.roles = grantedRoles;
+
+    // Onboarding can add membership after the access token was issued. Tenant
+    // discovery reads that membership live, so the browser need not sign in again.
+    await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/organizations/${nakuruOrganizationId}/members`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify("identity-user-1") },
+    );
+    managedAccount.roles = [...grantedRoles, { code: "GRO", tenantId: "ke.nakuru" }];
+    const lateMembership = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/tenants`,
+      { headers: { Cookie: cookie } },
+    );
+    expect((await lateMembership.json()).tenants.map((tenant: { tenantId: string }) => tenant.tenantId).sort())
+      .toEqual(["ke.bomet", "ke.kisumu", "ke.nakuru"]);
     managedAccount.roles = grantedRoles;
 
     // Membership is rechecked live in Keycloak, not only from session claims.
