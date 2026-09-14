@@ -97,10 +97,31 @@ Set `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a
 dedicated Keycloak service account. Password-grant admin configuration remains
 only as a migration fallback and should not be used for a new deployment.
 
-The corresponding egov-user workload endpoints link only existing employee
-records. They never create a shadow user or generated password. The browser
+`memberships/_ensure` links the Keycloak user to a DIGIT employee before adding
+the Organization membership. With `digitUserUuid` it links that existing
+employee. Without it, egov-user `employees/_ensure` returns the subject's
+already-linked employee, or, for a genuinely new onboarding founder, creates one
+at the mapped Organization tenant with only the base `EMPLOYEE` role. Call it
+after the tenant foundation and Organization mapping exist; authorization roles
+follow through `role-assignments/_ensure` and stay in DIGIT. One DIGIT user UUID
+is kept across later Organization memberships.
+
+`eg_user.password` is `NOT NULL`, so a passwordless employee row is impossible.
+A founder employee stores a non-BCrypt disabled-credential marker that no input
+can match, never a generated secret, and the password change/reset flows refuse
+to replace it. The browser
 session exchange is separately authorized by the signed, audience-limited
 Keycloak assertion rather than either workload token.
+
+## Docker Compose deployment
+
+`deploy/digit-compose/` layers Keycloak 26.7.3, the BFF, and egov-user identity
+configuration onto a DIGIT local-setup Compose project. Secrets live only in
+`0600` env files described by the `*.env.example` files. `configure-keycloak.sh`
+creates a temporary master admin with `kc.sh bootstrap-admin`, configures the
+Organizations realm, clients, mappers, and service account, then deletes that
+admin. `nginx-identity.conf` exposes only realm endpoints, login resources, and
+`/identity/`.
 
 ## Failure behavior
 
