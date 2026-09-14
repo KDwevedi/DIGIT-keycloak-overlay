@@ -6,7 +6,7 @@ services:
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
 
   identity-bff:
-    image: digit-identity-bff:bomet-2a73e0d
+    image: digit-identity-bff:bomet-a92fe3b
     container_name: digit-identity-bff
     command:
       - node
