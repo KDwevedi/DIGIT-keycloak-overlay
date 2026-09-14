@@ -185,7 +185,9 @@ export async function revokeToken(accessToken: string): Promise<void> {
     await send("/_logout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ RequestInfo: requestInfo(accessToken) }),
+      // egov-user reads TokenWrapper.access_token; Kong authorizes the route
+      // from RequestInfo.authToken. Both carry the token being revoked.
+      body: JSON.stringify({ access_token: accessToken, RequestInfo: requestInfo(accessToken) }),
     }, "logout");
   } catch (error) {
     if (error instanceof DigitUnauthorizedError) return;

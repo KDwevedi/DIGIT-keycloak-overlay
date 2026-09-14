@@ -126,8 +126,10 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
   });
 
   app.post("/user/_logout", (req, res) => {
-    const token = req.body?.RequestInfo?.authToken;
-    if (!token || !tokens.delete(token)) return res.status(401).json({ error: "invalid token" });
+    // Mirrors egov-user's TokenWrapper body plus Kong's RequestInfo authorization.
+    const token = req.body?.access_token;
+    if (!token || req.body?.RequestInfo?.authToken !== token) return res.status(400).json({ error: "Logout failed" });
+    if (!tokens.delete(token)) return res.status(401).json({ error: "invalid token" });
     stats.logouts += 1;
     return res.json({ status: "ok" });
   });
