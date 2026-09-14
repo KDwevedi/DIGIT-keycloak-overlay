@@ -6,11 +6,13 @@ import {
   ensureOrganizationMembership,
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
+  readIdentityUserProfile,
 } from "./identity-admin.js";
 import { currentSession } from "./identity-routes.js";
 import {
+  DigitIdentityUnavailableError,
+  ensureDigitEmployee,
   ensureDigitOrganization,
-  ensureDigitSubject,
   reconcileDigitMembership,
 } from "./digit-identity.js";
 import { runIdentityReconciliation } from "./identity-reconciliation.js";
@@ -32,6 +34,11 @@ function requiredString(value: unknown, name: string): string {
     throw new IdentityAdminError(`${name} is required`, 400);
   }
   return value.trim();
+}
+
+function optionalString(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requiredString(value, name);
 }
 
 function handleAdminError(error: unknown, res: express.Response) {
@@ -100,19 +107,34 @@ export function registerIdentityControlRoutes(app: express.Application): void {
     });
   }));
 
+  // Links the Keycloak user to its DIGIT employee, then records Organization
+  // membership. Without digitUserUuid, egov-user returns the subject's existing
+  // employee or provisions one without a local password. Call this only after
+  // the tenant foundation and Organization mapping exist; roles follow through
+  // role-assignments/_ensure.
   app.post("/internal/identity/v1/memberships/_ensure", asyncRoute(async (req, res) => {
     try {
       const organizationId = requiredString(req.body?.organizationId, "organizationId");
       const userId = requiredString(req.body?.userId, "userId");
-      const digitUserUuid = requiredString(req.body?.digitUserUuid, "digitUserUuid");
-      await ensureOrganizationMembership({ organizationId, userId });
-      await ensureDigitSubject({
+      const digitUserUuid = optionalString(req.body?.digitUserUuid, "digitUserUuid");
+      const mobileNumber = optionalString(req.body?.mobileNumber, "mobileNumber");
+      const profile = digitUserUuid ? undefined : {
+        ...await readIdentityUserProfile(userId),
+        ...(mobileNumber && { mobileNumber }),
+      };
+      const employee = await ensureDigitEmployee({
         issuer: config.keycloakIssuer,
         subject: userId,
-        digitUserUuid,
+        organizationId,
+        ...(digitUserUuid && { digitUserUuid }),
+        ...(profile && { profile }),
       });
-      return res.status(204).end();
+      await ensureOrganizationMembership({ organizationId, userId });
+      return res.json(employee);
     } catch (error) {
+      if (error instanceof DigitIdentityUnavailableError) {
+        return res.status(502).json({ error: error.message });
+      }
       return handleAdminError(error, res);
     }
   }));

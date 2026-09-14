@@ -179,6 +179,23 @@ export async function ensureDigitOrganization(input: {
   await post("/organizations/_ensure", input);
 }
 
+export async function ensureDigitEmployee(input: {
+  issuer: string;
+  subject: string;
+  organizationId: string;
+  digitUserUuid?: string;
+  profile?: { name: string; emailId?: string; mobileNumber?: string };
+}): Promise<{ digitUserUuid: string; created: boolean }> {
+  const result = await post("/employees/_ensure", input);
+  if (typeof result.digitUserUuid !== "string" || !result.digitUserUuid ||
+      typeof result.created !== "boolean") {
+    throw new DigitIdentityUnavailableError(
+      "DIGIT identity service returned an invalid employee link",
+    );
+  }
+  return { digitUserUuid: result.digitUserUuid, created: result.created };
+}
+
 export async function ensureDigitSubject(input: {
   issuer: string;
   subject: string;

@@ -90,7 +90,11 @@ describe("identity BFF", () => {
           digitUserUuid: "digit-user-1",
         }),
       });
-      expect(membership.status).toBe(204);
+      expect(membership.status).toBe(200);
+      expect(await membership.json()).toEqual({
+        digitUserUuid: "digit-user-1",
+        created: false,
+      });
     }
 
     const ensureRoles = () => fetch(`${base}/role-assignments/_ensure`, {
@@ -124,6 +128,70 @@ describe("identity BFF", () => {
       activated: 1,
       failures: [],
     });
+  });
+
+  it("provisions a new founder once and keeps that DIGIT user across Organizations", async () => {
+    const base = `http://localhost:${getAppPort()}/internal/identity/v1`;
+    const headers = {
+      Authorization: "Bearer test-control-plane",
+      "Content-Type": "application/json",
+    };
+    const created = await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/users`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: "founder@example.org",
+          email: "founder@example.org",
+          firstName: "New",
+          lastName: "Founder",
+          emailVerified: true,
+        }),
+      },
+    );
+    expect(created.status).toBe(201);
+    const founderId = created.headers.get("location")!.split("/").pop()!;
+
+    const ensureOrganization = async (tenantId: string, alias: string) => {
+      const response = await fetch(`${base}/organizations/_ensure`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ tenantId, alias, name: alias }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()).organization.id as string;
+    };
+    const ensureMembership = async (organizationId: string) => {
+      const response = await fetch(`${base}/memberships/_ensure`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ organizationId, userId: founderId }),
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+
+    const firstOrganization = await ensureOrganization("founder.one", "founder-one");
+    const first = await ensureMembership(firstOrganization);
+    expect(first).toMatchObject({ created: true });
+    expect(await ensureMembership(firstOrganization)).toEqual({
+      digitUserUuid: first.digitUserUuid,
+      created: false,
+    });
+
+    const secondOrganization = await ensureOrganization("founder.two", "founder-two");
+    expect(await ensureMembership(secondOrganization)).toEqual({
+      digitUserUuid: first.digitUserUuid,
+      created: false,
+    });
+
+    const unmapped = await fetch(`${base}/memberships/_ensure`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ organizationId: "missing-org", userId: founderId }),
+    });
+    expect(unmapped.status).toBe(502);
   });
 
   it("exposes configured methods and rejects unknown methods", async () => {

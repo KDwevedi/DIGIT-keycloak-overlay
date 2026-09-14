@@ -197,6 +197,27 @@ export function createJwksApp() {
     return res.json({ tenantId: req.body?.tenantId });
   });
 
+  const digitSubjects = new Map<string, string>();
+  app.post("/internal/identity/v1/employees/_ensure", requireWorkload, (req, res) => {
+    if (!digitOrganizations.has(req.body?.organizationId)) {
+      return res.status(404).json({ error: "Identity organization is not mapped" });
+    }
+    const key = `${req.body?.issuer}:${req.body?.subject}`;
+    const linked = digitSubjects.get(key);
+    const requested = req.body?.digitUserUuid;
+    if (linked && requested && linked !== requested) {
+      return res.status(409).json({ error: "already linked" });
+    }
+    if (linked || requested) {
+      digitSubjects.set(key, linked || requested);
+      return res.json({ digitUserUuid: linked || requested, created: false });
+    }
+    if (!req.body?.profile?.name) return res.status(400).json({ error: "profile.name" });
+    const created = `digit-employee-${digitSubjects.size + 1}`;
+    digitSubjects.set(key, created);
+    return res.json({ digitUserUuid: created, created: true });
+  });
+
   app.post("/internal/identity/v1/subjects/_ensure", requireWorkload, (req, res) => {
     return res.json({ digitUserUuid: req.body?.digitUserUuid });
   });

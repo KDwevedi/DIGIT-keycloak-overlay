@@ -6,6 +6,7 @@ interface MockUser {
   username: string;
   email: string;
   firstName?: string;
+  lastName?: string;
   enabled: boolean;
   emailVerified: boolean;
 }
@@ -211,7 +212,7 @@ export function createKcAdminMock() {
   // POST /admin/realms/:realm/users — create user
   app.post("/admin/realms/:realm/users", (req, res) => {
     const realm = getOrCreateRealm(req.params.realm);
-    const { username, email, firstName, enabled, emailVerified } = req.body;
+    const { username, email, firstName, lastName, enabled, emailVerified } = req.body;
     // Check for duplicate by email or username
     const exists = realm.users.some(
       (u) => u.email === email || u.username === username,
@@ -224,11 +225,18 @@ export function createKcAdminMock() {
       username: username || email,
       email,
       firstName,
+      lastName,
       enabled: enabled ?? true,
       emailVerified: emailVerified ?? false,
     };
     realm.users.push(user);
     res.status(201).set("Location", `/admin/realms/${req.params.realm}/users/${user.id}`).end();
+  });
+
+  app.get("/admin/realms/:realm/users/:userId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const user = realm.users.find((candidate) => candidate.id === req.params.userId);
+    return user ? res.json(user) : res.status(404).json({ error: "User not found" });
   });
 
   // PUT /admin/realms/:realm/users/:userId/groups/:groupId — add user to group

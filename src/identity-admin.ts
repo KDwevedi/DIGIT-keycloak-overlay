@@ -21,6 +21,17 @@ interface RoleRepresentation {
 
 interface UserRepresentation {
   id?: string;
+  username?: string;
+  email?: string;
+  emailVerified?: boolean;
+  firstName?: string;
+  lastName?: string;
+  enabled?: boolean;
+}
+
+export interface IdentityUserProfile {
+  name: string;
+  emailId?: string;
 }
 
 export interface OrganizationReconciliationState {
@@ -183,6 +194,27 @@ export async function ensureOrganization(input: {
     tenantId: input.tenantId,
     alias: input.alias,
     name: input.name,
+  };
+}
+
+/**
+ * Profile facts used when DIGIT must create an employee for a new founder.
+ * Only a verified email is passed on; the subject itself is the link key.
+ */
+export async function readIdentityUserProfile(userId: string): Promise<IdentityUserProfile> {
+  const response = await request(`/users/${encodeURIComponent(userId)}`);
+  const user = await response.json() as UserRepresentation;
+  if (user.id !== userId || user.enabled === false) {
+    throw new IdentityAdminError("Keycloak user is not active", 404);
+  }
+  const name = [user.firstName, user.lastName]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" ") || user.username?.trim() || "";
+  if (!name) throw new IdentityAdminError("Keycloak user has no name", 400);
+  return {
+    name,
+    ...(user.emailVerified === true && user.email ? { emailId: user.email } : {}),
   };
 }
 
