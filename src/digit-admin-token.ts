@@ -32,6 +32,9 @@ function credentialTokenCache(credential: () => Credential) {
     pending = passwordLogin({ username, password, tenantId, userType }).then((login) => {
       cached = { token: login.accessToken, expiresAt: login.expiresAt };
       return login.accessToken;
+    }, (error: Error) => {
+      // A rejected service credential is an operator problem, never a caller conflict.
+      throw new DigitUnavailableError(`DIGIT ${label} login failed: ${error.message}`);
     }).finally(() => {
       pending = null;
     });

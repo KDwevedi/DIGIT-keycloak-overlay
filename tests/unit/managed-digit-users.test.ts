@@ -174,6 +174,16 @@ describe("managed DIGIT accounts", () => {
     expect(fake.stats.adminLogins).toBe(adminLogins + 1);
   });
 
+  it("reports a rejected admin credential as unavailable, not as an account conflict", async () => {
+    resetDigitAdminToken();
+    (config as any).digitAdminPassword = "Wrong@Pass1";
+    const identity = managedIdentity(ISSUER, subject());
+    await expect(ensureManagedAccount(identity, desired([["pg", []]]), profile))
+      .rejects.toMatchObject({ status: 503 });
+    (config as any).digitAdminPassword = "Adm1n@Secret";
+    resetDigitAdminToken();
+  });
+
   it("logout revokes the user's DIGIT token", async () => {
     const identity = managedIdentity(ISSUER, subject());
     await ensureManagedAccount(identity, desired([["pg", []]]), profile);
