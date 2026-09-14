@@ -10,6 +10,7 @@ interface Account {
   userName: string;
   name: string;
   mobileNumber: string | null;
+  countryCode?: string | null;
   emailId: string | null;
   tenantId: string;
   type: string;
@@ -120,6 +121,7 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     stats.updates += 1;
     Object.assign(account, {
       name: user.name, mobileNumber: user.mobileNumber ?? account.mobileNumber, emailId: user.emailId,
+      countryCode: user.countryCode ?? account.countryCode,
       active: user.active ?? account.active, identificationMark: user.identificationMark, roles: user.roles,
     });
     return res.json({ user: [publicAccount(account)] });

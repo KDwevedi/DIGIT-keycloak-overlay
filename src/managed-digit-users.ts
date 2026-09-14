@@ -46,6 +46,7 @@ export interface ManagedProfile {
   name: string;
   emailId?: string;
   mobileNumber?: string;
+  countryCode?: string;
 }
 
 /** tenantId -> allowlisted DIGIT role codes the subject should hold there. */
@@ -151,6 +152,7 @@ function editable(account: DigitAccount): DigitAccountInput {
     userName: account.userName,
     name: account.name,
     mobileNumber: account.mobileNumber,
+    countryCode: account.countryCode,
     emailId: account.emailId,
     tenantId: account.tenantId,
     type: account.type,
@@ -222,6 +224,7 @@ export async function ensureManagedAccount(
         userName: identity.username,
         name: profile.name.trim().slice(0, 50),
         mobileNumber: profile.mobileNumber.trim(),
+        countryCode: profile.countryCode?.trim() || null,
         emailId: profile.emailId || null,
         tenantId: identity.tenantId,
         type: MANAGED_USER_TYPE,

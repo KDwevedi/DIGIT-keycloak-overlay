@@ -38,10 +38,32 @@ interface ClaimedOperation {
     ownerSubject: string;
     accountName: string;
     accountCode: string;
+    countryCode: string;
     organizationAlias: string;
     requestedTenantId: string;
     tenantMetadata?: Record<string, unknown>;
   };
+}
+
+function founderContact(signup: ClaimedOperation["Signup"]): {
+  mobileNumber: string;
+  countryCode?: string;
+} {
+  const founder = signup.tenantMetadata?.founder as {
+    mobileNumber?: unknown;
+    countryCode?: unknown;
+  } | undefined;
+  let mobileNumber = typeof founder?.mobileNumber === "string"
+    ? founder.mobileNumber.replace(/[\s()-]/g, "")
+    : "";
+  const countryCode = typeof founder?.countryCode === "string"
+    ? founder.countryCode.trim()
+    : "";
+  // egov-user stores the dial code separately and validates only national digits.
+  if (countryCode && mobileNumber.startsWith(countryCode)) {
+    mobileNumber = mobileNumber.slice(countryCode.length);
+  }
+  return { mobileNumber, ...(countryCode && { countryCode }) };
 }
 
 export class ProvisioningFailure extends Error {
@@ -204,9 +226,8 @@ export async function processOnboardingOperation(claimed: ClaimedOperation): Pro
       });
     });
     await run("DIGIT_ACCOUNT", async () => {
-      const founder = signup.tenantMetadata?.founder as { mobileNumber?: unknown } | undefined;
-      await syncSubject(signup.ownerSubject,
-        typeof founder?.mobileNumber === "string" ? founder.mobileNumber : "");
+      const contact = founderContact(signup);
+      await syncSubject(signup.ownerSubject, contact.mobileNumber, contact.countryCode);
     });
     await settle("_complete", {
       id: claimed.Operation.id, leaseToken: claimed.leaseToken, completedSteps: [...completed],

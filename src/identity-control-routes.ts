@@ -122,12 +122,13 @@ export function registerIdentityControlRoutes(app: express.Application): void {
         );
       }
       const mobileNumber = optionalString(req.body?.mobileNumber, "mobileNumber") || "";
+      const countryCode = optionalString(req.body?.countryCode, "countryCode") || "";
       const mapping = await readOrganizationMapping(organizationId);
       if (!mapping) {
         throw new IdentityAdminError("Organization is not mapped to a DIGIT tenant", 404);
       }
       await ensureOrganizationMembership({ organizationId, userId });
-      const outcome = (await syncSubject(userId, mobileNumber)).get(mapping.tenantId);
+      const outcome = (await syncSubject(userId, mobileNumber, countryCode)).get(mapping.tenantId);
       return res.json({
         tenantId: mapping.tenantId,
         digitUserUuid: outcome?.account?.uuid ?? null,

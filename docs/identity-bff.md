@@ -114,10 +114,11 @@ calls.
   login calls.
 - **Mobile required:** egov-user requires a mobile number to create an employee.
   Login-time creation uses a `phone_number` claim. The worker uses
-  `tenantMetadata.founder.mobileNumber`. `memberships/_ensure` takes
-  `mobileNumber` and otherwise reuses the mobile on the subject's existing
-  managed account. Without one, that tenant's account is not created and the
-  tenant is not offered.
+  `tenantMetadata.founder.{mobileNumber,countryCode}` and separates an E.164
+  dial prefix before calling egov-user. The state tenant must contain a matching
+  `common-masters.MobileNumberValidation` rule. `memberships/_ensure` accepts
+  `mobileNumber` plus `countryCode` and otherwise reuses them from an existing
+  managed account. Without a valid contact, that tenant's account is not created.
 - **Separate accounts per tenant:** a person in two Organizations has two DIGIT
   accounts (different UUIDs) and receives the account matching the selected
   tenant. Cross-tenant work under one DIGIT identity would need gateway changes.

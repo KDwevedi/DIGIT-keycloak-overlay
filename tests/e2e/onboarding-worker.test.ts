@@ -53,14 +53,15 @@ async function kcUser(username: string): Promise<string> {
   return response.headers.get("location")!.split("/").pop()!;
 }
 
-function operation(id: string, subject: string, slug: string, mobileNumber?: string) {
+function operation(id: string, subject: string, slug: string, mobileNumber?: string, countryCode?: string) {
   return {
     Operation: { id, status: "RUNNING", completedSteps: [] },
     leaseToken: `lease-${id}`,
     Signup: {
       id: `signup-${id}`, ownerIssuer: getIssuer(), ownerSubject: subject,
       accountName: `${slug} council`, accountCode: slug.toUpperCase(), organizationAlias: slug,
-      requestedTenantId: `pg.${slug}`, tenantMetadata: mobileNumber ? { founder: { mobileNumber } } : {},
+      requestedTenantId: `pg.${slug}`, countryCode: "KE",
+      tenantMetadata: mobileNumber ? { founder: { mobileNumber, countryCode } } : {},
     },
   };
 }
@@ -107,7 +108,7 @@ afterAll(async () => {
 describe("onboarding worker", () => {
   it("provisions tenant foundation, Organization, founder membership, roles and DIGIT account", async () => {
     const founder = await kcUser("founder-one");
-    pgr.queue.push(operation("op-1", founder, "riverside", "9812345678"));
+    pgr.queue.push(operation("op-1", founder, "riverside", "+254712345678", "+254"));
 
     expect(await runOnboardingWorkerOnce()).toBe(1);
 
@@ -118,6 +119,8 @@ describe("onboarding worker", () => {
     const account = [...digit.accounts.values()].find((candidate) => candidate.name === "New Founder")!;
     expect(account.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:pg\.riverside$/);
     expect(account.tenantId).toBe("pg.riverside");
+    expect(account.mobileNumber).toBe("712345678");
+    expect(account.countryCode).toBe("+254");
     expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort())
       .toEqual(["pg.riverside:EMPLOYEE", "pg.riverside:GRO"]);
     expect(digit.encKeys.has("pg.riverside")).toBe(true);

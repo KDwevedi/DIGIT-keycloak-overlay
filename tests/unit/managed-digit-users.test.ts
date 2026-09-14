@@ -50,7 +50,10 @@ beforeEach(() => {
 });
 
 const subject = () => `subject-${run}`;
-const profile = { name: "New Founder", emailId: "founder@example.org", mobileNumber: "0712345678" };
+const profile = {
+  name: "New Founder", emailId: "founder@example.org",
+  mobileNumber: "712345678", countryCode: "+254",
+};
 
 describe("managed DIGIT accounts", () => {
   it("generates policy-compliant, non-repeating one-time passwords", () => {
@@ -68,6 +71,7 @@ describe("managed DIGIT accounts", () => {
     expect(result.created).toBe(true);
     expect(result.account).toMatchObject({
       userName: identity.username, identificationMark: identity.marker, tenantId: "pg", type: "EMPLOYEE",
+      mobileNumber: "712345678", countryCode: "+254",
     });
     expect(result.account!.roles.map((role) => `${role.tenantId}:${role.code}`).sort())
       .toEqual(["pg:EMPLOYEE", "pg:GRO"]);

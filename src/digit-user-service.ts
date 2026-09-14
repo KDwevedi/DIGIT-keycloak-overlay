@@ -29,6 +29,7 @@ export interface DigitAccount {
   userName: string;
   name: string;
   mobileNumber?: string | null;
+  countryCode?: string | null;
   emailId?: string | null;
   tenantId: string;
   type: string;
@@ -92,7 +93,7 @@ function requestInfo(authToken?: string) {
 }
 
 const USER_REQUEST_FIELDS = [
-  "id", "uuid", "userName", "name", "mobileNumber", "emailId", "locale", "type",
+  "id", "uuid", "userName", "name", "mobileNumber", "countryCode", "emailId", "locale", "type",
   "roles", "active", "tenantId", "permanentCity",
 ] as const;
 
