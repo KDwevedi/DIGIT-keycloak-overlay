@@ -9,8 +9,13 @@ readonly ADMIN_CLIENT=digit-identity-admin
 
 set -a
 . /opt/digit/identity-bff.env
-. /opt/digit/identity-bff-bootstrap.env
+if [ -f /opt/digit/identity-bff-bootstrap.env ]; then
+  . /opt/digit/identity-bff-bootstrap.env
+fi
 set +a
+
+: "${KC_BOOTSTRAP_ADMIN_USERNAME:?set KC_BOOTSTRAP_ADMIN_USERNAME for this run}"
+: "${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD for this run}"
 
 docker exec \
   -e KCADM_USERNAME="$KC_BOOTSTRAP_ADMIN_USERNAME" \
