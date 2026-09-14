@@ -126,6 +126,19 @@ export const config = {
   digitAdminPassword: process.env.DIGIT_ADMIN_PASSWORD || "",
   digitAdminTenantId: process.env.DIGIT_ADMIN_TENANT_ID || "",
   digitAdminUserType: process.env.DIGIT_ADMIN_USER_TYPE || "EMPLOYEE",
+  // Optional MDMS_ADMIN credential for onboarding tenant-foundation writes.
+  digitProvisionerUsername: process.env.DIGIT_PROVISIONER_USERNAME || "",
+  digitProvisionerPassword: process.env.DIGIT_PROVISIONER_PASSWORD || "",
+  digitProvisionerTenantId: process.env.DIGIT_PROVISIONER_TENANT_ID || "",
+  digitMdmsCreateUrl: process.env.DIGIT_MDMS_CREATE_URL || "",
+  // Optional in-process worker that provisions submitted PGR onboarding operations.
+  onboardingWorkerEnabled: process.env.ONBOARDING_WORKER_ENABLED === "true",
+  pgrOnboardingWorkerUrl: process.env.PGR_ONBOARDING_WORKER_URL || "",
+  pgrOnboardingWorkerToken: process.env.PGR_ONBOARDING_WORKER_TOKEN || "",
+  onboardingWorkerIntervalSeconds: parseInt(process.env.ONBOARDING_WORKER_INTERVAL_SECONDS || "15"),
+  onboardingWorkerLeaseSeconds: parseInt(process.env.ONBOARDING_WORKER_LEASE_SECONDS || "120"),
+  onboardingFounderGroup: process.env.ONBOARDING_FOUNDER_GROUP || "founders",
+  onboardingFounderRoles: csv(process.env.ONBOARDING_FOUNDER_ROLES || "GRO"),
   digitManagedUserTenantId: process.env.DIGIT_MANAGED_USER_TENANT_ID || "",
   digitManagedBaseRoles: csv(process.env.DIGIT_MANAGED_BASE_ROLES || "EMPLOYEE"),
   digitManagedRoleAllowlist: csv(

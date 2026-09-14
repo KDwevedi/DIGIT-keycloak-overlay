@@ -6,8 +6,11 @@ issuance of the signed-in person's own DIGIT login through existing egov-user
 APIs, and the small Keycloak provisioning
 API used by onboarding or reconciliation workers.
 
-The BFF has **no dependency on PGR**. PGR can call its internal APIs during an
-onboarding saga, but the BFF builds and starts without PGR and never calls PGR.
+The BFF has **no hard dependency on PGR**: it builds, starts and serves sign-in
+without PGR. PGR calls its session-introspection API. An optional in-process
+onboarding worker (`ONBOARDING_WORKER_ENABLED=true`) leases submitted PGR
+onboarding operations through PGR's workload API and provisions them; see
+[docs/identity-bff.md](docs/identity-bff.md#onboarding-worker-optional).
 
 **Design doc:** [docs/plans/2026-03-05-keycloak-acl-design.md](docs/plans/2026-03-05-keycloak-acl-design.md)
 **Identity BFF v1:** [docs/identity-bff.md](docs/identity-bff.md)

@@ -134,6 +134,19 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     return res.json({ status: "ok" });
   });
 
+  app.post("/mdms-v2/v2/_create/tenant.tenants", (req, res) => {
+    const caller = bearer(req);
+    if (!caller) return res.status(401).json({ error: "invalid token" });
+    if (!caller.roles.some((role) => role.code === "MDMS_ADMIN")) return res.status(403).json({ error: "forbidden" });
+    const code = req.body?.Mdms?.data?.code;
+    if (!code || !req.body?.Mdms?.data?.name || req.body?.Mdms?.tenantId !== code.split(".")[0]) {
+      return res.status(400).json({ error: "invalid tenant" });
+    }
+    if (options.tenants.includes(code)) return res.status(400).json({ error: "DUPLICATE_RECORD" });
+    options.tenants.push(code);
+    return res.json({ mdms: [req.body.Mdms] });
+  });
+
   app.post("/mdms-v2/v1/_search", (req, res) => {
     const root = req.body?.MdmsCriteria?.tenantId;
     return res.json({ MdmsRes: { tenant: { tenants: options.tenants

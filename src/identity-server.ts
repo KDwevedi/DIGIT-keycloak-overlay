@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { createIdentityApp } from "./identity-app.js";
 import { initJwks } from "./jwt.js";
 import { runIdentityReconciliation } from "./identity-reconciliation.js";
+import { startOnboardingWorker } from "./onboarding-worker.js";
 
 initJwks();
 initCache();
@@ -17,6 +18,8 @@ const reconcile = () => void runIdentityReconciliation()
 const server = app.listen(config.port, () => {
   console.log(`digit-identity-bff listening on :${config.port}`);
   if (config.identityReconcileOnStartup) reconcile();
+  // Optional; failures to reach PGR are logged and never affect sign-in.
+  startOnboardingWorker();
 });
 
 if (config.identityReconciliationIntervalSeconds > 0) {

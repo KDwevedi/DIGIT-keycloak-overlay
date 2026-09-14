@@ -4,8 +4,8 @@
 
 The identity BFF is a standalone executable (`npm run start:identity`). Its
 runtime dependencies are Redis, Keycloak, and DIGIT's **existing** egov-user and
-MDMS APIs. It does not import, call, start, or health-check PGR, and it needs no
-egov-user code change.
+MDMS APIs. It needs no egov-user code change. PGR is not required to start or
+sign in; only the optional onboarding worker calls PGR.
 
 ```text
 Browser ── OIDC redirect / opaque cookie ──> Identity BFF ──> Keycloak (OIDC + Admin API)
@@ -142,6 +142,34 @@ Startup (`IDENTITY_RECONCILE_ON_STARTUP=true`) and periodic
 read enabled mapped Organizations and their group roles from Keycloak, and apply
 them to managed accounts through egov-user. Former members are deactivated.
 Members without an account yet are reported as `unprovisioned`, not failures.
+
+## Onboarding worker (optional)
+
+Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_URL`
+(internal PGR base, e.g. `http://pgr-services:8080/pgr-services`) and
+`PGR_ONBOARDING_WORKER_TOKEN`. Every `ONBOARDING_WORKER_INTERVAL_SECONDS` it:
+
+1. leases a `PENDING` operation with `POST /v2/onboarding/internal/operations/_claim`
+   (PGR uses `FOR UPDATE SKIP LOCKED`; an expired lease is re-claimable);
+2. runs idempotent steps, recording each in `completedSteps`:
+   - `TENANT_FOUNDATION`: creates the `tenant.tenants` MDMS record for
+     `requestedTenantId`, using a separate `DIGIT_PROVISIONER_*` credential (an
+     `MDMS_ADMIN` employee, `DIGIT_MDMS_CREATE_URL`). Without that credential the
+     tenant must already exist;
+   - `ORGANIZATION`: Keycloak Organization `organizationAlias` mapped to the tenant;
+   - `FOUNDER_MEMBERSHIP`: adds the signup owner to it;
+   - `FOUNDER_ROLES`: `ONBOARDING_FOUNDER_GROUP` with `ONBOARDING_FOUNDER_ROLES`;
+   - `DIGIT_ACCOUNT`: the founder's managed DIGIT account, created with
+     `tenantMetadata.founder.mobileNumber`, and its projected roles;
+3. reports `_complete` (operation `SUCCEEDED`, signup `ACTIVE`) or `_fail` with
+   `retryable` (`RETRYABLE_FAILED`; the owner may `_retry`) or terminal
+   (`TERMINAL_FAILED`, identifiers released).
+
+Transient Keycloak/DIGIT/tenant-visibility errors are retryable. Conflicts
+(alias taken, colliding legacy account, missing founder mobile) are terminal.
+Only `tenant.tenants` is provisioned; boundaries, departments, service
+definitions, roles/actions and localization for a new tenant are not.
+A PGR outage only logs a skipped worker cycle.
 
 ## Docker Compose deployment
 

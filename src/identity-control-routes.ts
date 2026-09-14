@@ -6,21 +6,14 @@ import {
   ensureOrganizationMembership,
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
-  readIdentityUserProfile,
   readOrganizationMapping,
 } from "./identity-admin.js";
 import { currentSession } from "./identity-routes.js";
 import { DigitUnavailableError } from "./digit-user-service.js";
-import {
-  desiredRolesBySubject,
-  runIdentityReconciliation,
-} from "./identity-reconciliation.js";
+import { runIdentityReconciliation } from "./identity-reconciliation.js";
+import { syncSubject } from "./identity-provisioning.js";
 import { clearTenantCaches, isActiveDigitTenant } from "./identity-tenants.js";
-import {
-  ensureManagedAccount,
-  ManagedAccountError,
-  managedIdentity,
-} from "./managed-digit-users.js";
+import { ManagedAccountError } from "./managed-digit-users.js";
 
 function asyncRoute(
   handler: (req: express.Request, res: express.Response) => Promise<unknown>,
@@ -54,15 +47,6 @@ function handleAdminError(error: unknown, res: express.Response) {
     return res.status(error.status === 409 ? 409 : 502).json({ error: error.message });
   }
   throw error;
-}
-
-/** Re-derives the subject's desired DIGIT roles from Keycloak and applies them. */
-async function syncSubject(userId: string, mobileNumber?: string) {
-  const desired = (await desiredRolesBySubject()).bySubject.get(userId) || new Map();
-  const profile = mobileNumber === undefined
-    ? undefined
-    : { ...await readIdentityUserProfile(userId), mobileNumber };
-  return ensureManagedAccount(managedIdentity(config.keycloakIssuer, userId), desired, profile);
 }
 
 export function registerIdentityControlRoutes(app: express.Application): void {
