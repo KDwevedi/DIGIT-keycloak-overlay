@@ -9,7 +9,52 @@ export interface KCClaims {
     roles: string[];
   };
   groups?: string[];
+  organization?: Record<string, KCOrganizationClaim>;
+  nonce?: string;
+  azp?: string;
   realm?: string;  // extracted from iss claim
+}
+
+export interface KCOrganizationClaim {
+  id?: string;
+  groups?: string[];
+  realm_access?: {
+    roles?: string[];
+  };
+  resource_access?: Record<string, { roles?: string[] }>;
+  [attribute: string]: unknown;
+}
+
+export interface IdentityTokenSet {
+  accessToken: string;
+  idToken?: string;
+  refreshToken?: string;
+  accessExpiresIn: number;
+  refreshExpiresIn?: number;
+}
+
+export interface IdentityAuthMethod {
+  id: string;
+  label: string;
+  type: "password" | "oauth" | "magic_link";
+  idpHint?: string;
+}
+
+export interface SelectedIdentityContext {
+  organizationId: string;
+  organizationAlias: string;
+  tenantId: string;
+  name: string;
+}
+
+export interface IdentitySession {
+  claims: KCClaims;
+  /** OIDC client that created this session; absent on sessions created before multi-flow support. */
+  oidcClientId?: string;
+  accessToken: string;
+  refreshToken?: string;
+  accessExpiresAt: number;
+  refreshExpiresAt?: number;
 }
 
 export interface DigitUser {

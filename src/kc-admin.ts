@@ -75,6 +75,22 @@ export async function createRealm(
 ): Promise<void> {
   // Build realm payload from template
   const payload = JSON.parse(realmTemplate.replace(/__REALM_NAME__/g, realmName));
+  const bffClient = payload.clients?.find(
+    (client: { clientId?: string }) => client.clientId === "digit-identity-bff",
+  );
+  if (bffClient) {
+    bffClient.clientId = config.keycloakBffClientId;
+    bffClient.secret = config.keycloakBffClientSecret;
+    bffClient.redirectUris = [config.identityRedirectUri];
+    const audienceMapper = bffClient.protocolMappers?.find(
+      (mapper: { protocolMapper?: string }) =>
+        mapper.protocolMapper === "oidc-audience-mapper",
+    );
+    if (audienceMapper) {
+      audienceMapper.config["included.client.audience"] =
+        config.keycloakBffAudience;
+    }
+  }
   payload.groups = cities.map((c) => ({ name: c }));
 
   const resp = await fetch(adminUrl("/admin/realms"), {

@@ -6,6 +6,7 @@ interface MockUser {
   username: string;
   email: string;
   firstName?: string;
+  lastName?: string;
   enabled: boolean;
   emailVerified: boolean;
 }
@@ -17,12 +18,34 @@ interface RealmState {
   userGroups: Map<string, string[]>; // userId -> groupId[]
   userRoles: Map<string, Array<{ id: string; name: string }>>; // userId -> roles[]
   users: MockUser[];
+  organizations: Map<string, {
+    id: string;
+    name: string;
+    alias: string;
+    enabled: boolean;
+    attributes: Record<string, string[]>;
+    groups: Map<string, { id: string; name: string }>;
+    members: Set<string>;
+    groupMembers: Map<string, Set<string>>;
+    groupClientRoles: Map<string, Array<{ id: string; name: string }>>;
+  }>;
+  clients: Map<string, {
+    id: string;
+    clientId: string;
+    roles: Array<{ id: string; name: string }>;
+  }>;
 }
 
 let realms: Map<string, RealmState>;
+let lastAdminGrantType: string | undefined;
 
 function initState() {
   realms = new Map();
+  lastAdminGrantType = undefined;
+}
+
+export function getLastAdminGrantType(): string | undefined {
+  return lastAdminGrantType;
 }
 
 export function resetState() {
@@ -43,6 +66,23 @@ function getOrCreateRealm(name: string): RealmState {
       userGroups: new Map(),
       userRoles: new Map(),
       users: [],
+      organizations: new Map(),
+      clients: new Map([
+        ["digit-ui", {
+          id: "digit-ui-uuid",
+          clientId: "digit-ui",
+          roles: ["TENANT_ADMIN", "VIEWER", "GRO", "PGR_VIEWER"].map((role) => ({
+            id: `${role.toLowerCase()}-id`,
+            name: role,
+          })),
+        }],
+        ["digit-identity-bff-magic-link", {
+          id: "digit-identity-bff-magic-link-uuid",
+          clientId: "digit-identity-bff-magic-link",
+          enabled: true,
+          roles: [],
+        }],
+      ]),
     };
     realms.set(name, realm);
   }
@@ -53,13 +93,14 @@ export function createKcAdminMock() {
   initState();
 
   const app = express();
-  app.use(express.json({ limit: "10mb" }));
+  app.use(express.json({ limit: "10mb", strict: false }));
 
   // POST /realms/master/protocol/openid-connect/token — admin auth
   app.post(
     "/realms/:realm/protocol/openid-connect/token",
     express.urlencoded({ extended: true }),
-    (_req, res) => {
+    (req, res) => {
+      lastAdminGrantType = req.body.grant_type;
       res.json({
         access_token: "mock-kc-admin-token",
         token_type: "Bearer",
@@ -107,6 +148,8 @@ export function createKcAdminMock() {
       userGroups: new Map(),
       userRoles: new Map(),
       users: [],
+      organizations: new Map(),
+      clients: new Map(),
     });
 
     res.status(201).json({});
@@ -175,7 +218,7 @@ export function createKcAdminMock() {
   // POST /admin/realms/:realm/users — create user
   app.post("/admin/realms/:realm/users", (req, res) => {
     const realm = getOrCreateRealm(req.params.realm);
-    const { username, email, firstName, enabled, emailVerified } = req.body;
+    const { username, email, firstName, lastName, enabled, emailVerified } = req.body;
     // Check for duplicate by email or username
     const exists = realm.users.some(
       (u) => u.email === email || u.username === username,
@@ -188,11 +231,18 @@ export function createKcAdminMock() {
       username: username || email,
       email,
       firstName,
+      lastName,
       enabled: enabled ?? true,
       emailVerified: emailVerified ?? false,
     };
     realm.users.push(user);
     res.status(201).set("Location", `/admin/realms/${req.params.realm}/users/${user.id}`).end();
+  });
+
+  app.get("/admin/realms/:realm/users/:userId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const user = realm.users.find((candidate) => candidate.id === req.params.userId);
+    return user ? res.json(user) : res.status(404).json({ error: "User not found" });
   });
 
   // PUT /admin/realms/:realm/users/:userId/groups/:groupId — add user to group
@@ -285,6 +335,204 @@ export function createKcAdminMock() {
       res.json(roles);
     },
   );
+
+  app.get("/admin/realms/:realm/organizations", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const q = String(req.query.q || "");
+    const [attribute, ...valueParts] = q.split(":");
+    const value = valueParts.join(":");
+    const organizations = Array.from(realm.organizations.values()).filter(
+      (organization) => !q || organization.attributes[attribute]?.includes(value),
+    );
+    res.json(organizations);
+  });
+
+  app.post("/admin/realms/:realm/organizations", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    if (Array.from(realm.organizations.values()).some(
+      (organization) => organization.alias === req.body.alias,
+    )) return res.status(409).json({ error: "duplicate alias" });
+    const id = typeof req.body.id === "string" ? req.body.id : crypto.randomUUID();
+    realm.organizations.set(id, {
+      id,
+      name: req.body.name,
+      alias: req.body.alias,
+      enabled: req.body.enabled !== false,
+      attributes: req.body.attributes || {},
+      groups: new Map(),
+      members: new Set(),
+      groupMembers: new Map(),
+      groupClientRoles: new Map(),
+    });
+    res.status(201).set(
+      "Location",
+      `/admin/realms/${req.params.realm}/organizations/${id}`,
+    ).end();
+  });
+
+  app.put("/admin/realms/:realm/organizations/:organizationId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    Object.assign(organization, req.body);
+    res.status(204).end();
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    return organization ? res.json(organization) : res.status(404).json({ error: "not found" });
+  });
+
+  app.post("/admin/realms/:realm/organizations/:organizationId/members", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    if (organization.members.has(req.body)) return res.status(409).end();
+    organization.members.add(req.body);
+    res.status(201).end();
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId/members/:memberId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization?.members.has(req.params.memberId)) {
+      return res.status(404).json({ error: "not a member" });
+    }
+    res.json({ id: req.params.memberId });
+  });
+
+  app.delete("/admin/realms/:realm/organizations/:organizationId/members/:memberId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization?.members.delete(req.params.memberId)) return res.status(404).end();
+    res.status(204).end();
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId/members", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const first = Number(req.query.first || 0);
+    const max = Number(req.query.max || 100);
+    res.json([...organization.members].slice(first, first + max).map((id) => ({ id })));
+  });
+
+  app.get("/admin/realms/:realm/organizations/:organizationId/groups", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const search = String(req.query.search || "");
+    res.json(Array.from(organization.groups.values()).filter(
+      (group) => !search || group.name === search,
+    ));
+  });
+
+  app.post("/admin/realms/:realm/organizations/:organizationId/groups", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const existing = Array.from(organization.groups.values()).find(
+      (group) => group.name === req.body.name,
+    );
+    if (existing) return res.status(409).end();
+    const id = crypto.randomUUID();
+    organization.groups.set(id, { id, name: req.body.name });
+    res.status(201).set(
+      "Location",
+      `/admin/realms/${req.params.realm}/organizations/${req.params.organizationId}/groups/${id}`,
+    ).end();
+  });
+
+  app.put(
+    "/admin/realms/:realm/organizations/:organizationId/groups/:groupId/members/:userId",
+    (req, res) => {
+      const realm = getOrCreateRealm(req.params.realm);
+      const organization = realm.organizations.get(req.params.organizationId);
+      if (!organization) return res.status(404).json({ error: "not found" });
+      if (!organization.members.has(req.params.userId)) {
+        return res.status(400).json({ error: "not an organization member" });
+      }
+      const members = organization.groupMembers.get(req.params.groupId) || new Set();
+      members.add(req.params.userId);
+      organization.groupMembers.set(req.params.groupId, members);
+      res.status(204).end();
+    },
+  );
+
+  app.get(
+    "/admin/realms/:realm/organizations/:organizationId/groups/:groupId/members",
+    (req, res) => {
+      const realm = getOrCreateRealm(req.params.realm);
+      const organization = realm.organizations.get(req.params.organizationId);
+      if (!organization) return res.status(404).json({ error: "not found" });
+      const first = Number(req.query.first || 0);
+      const max = Number(req.query.max || 100);
+      const members = [...(organization.groupMembers.get(req.params.groupId) || new Set())];
+      res.json(members.slice(first, first + max).map((id) => ({ id })));
+    },
+  );
+
+  app.get("/admin/realms/:realm/clients", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const clientId = String(req.query.clientId || "");
+    const client = realm.clients.get(clientId);
+    res.json(client ? [client] : []);
+  });
+
+  app.get("/admin/realms/:realm/identity-provider/instances", (_req, res) => {
+    res.json([
+      { alias: "google", displayName: "Google", enabled: true },
+      { alias: "disabled-provider", enabled: false },
+    ]);
+  });
+
+  app.get("/admin/realms/:realm/clients/:clientUuid/roles/:roleName", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const client = Array.from(realm.clients.values()).find(
+      (candidate) => candidate.id === req.params.clientUuid,
+    );
+    const role = client?.roles.find((candidate) => candidate.name === req.params.roleName);
+    return role ? res.json(role) : res.status(404).json({ error: "not found" });
+  });
+
+  const roleMappingPath =
+    "/admin/realms/:realm/organizations/:organizationId/groups/:groupId" +
+    "/role-mappings/clients/:clientUuid";
+  app.get(roleMappingPath, (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    res.json(organization.groupClientRoles.get(
+      `${req.params.groupId}:${req.params.clientUuid}`,
+    ) || []);
+  });
+  app.post(roleMappingPath, (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const key = `${req.params.groupId}:${req.params.clientUuid}`;
+    const current = organization.groupClientRoles.get(key) || [];
+    for (const role of req.body) {
+      if (!current.some((candidate) => candidate.id === role.id)) current.push(role);
+    }
+    organization.groupClientRoles.set(key, current);
+    res.status(204).end();
+  });
+  app.delete(roleMappingPath, (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const organization = realm.organizations.get(req.params.organizationId);
+    if (!organization) return res.status(404).json({ error: "not found" });
+    const key = `${req.params.groupId}:${req.params.clientUuid}`;
+    const remove = new Set(req.body.map((role: { id: string }) => role.id));
+    organization.groupClientRoles.set(
+      key,
+      (organization.groupClientRoles.get(key) || []).filter(
+        (role) => !remove.has(role.id),
+      ),
+    );
+    res.status(204).end();
+  });
 
   return { app };
 }

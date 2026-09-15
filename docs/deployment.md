@@ -1,40 +1,24 @@
 # Keycloak Deployment & Operations Guide
 
-This guide covers the production deployment of Keycloak with the DIGIT stack, including Google SSO setup, role mapping, and administration.
+This guide covers the production deployment of Keycloak with the DIGIT stack,
+including the standalone identity BFF and the legacy exchange proxy during
+migration. The v1 BFF contract is documented in [identity-bff.md](identity-bff.md).
 
 ## Architecture Overview
 
-```
-Browser
-  │
-  │  https://api.egov.theflywheel.in/auth/*
-  │  https://api.egov.theflywheel.in/kc/*
-  ▼
-┌─────────────────────────────────────────────────────────┐
-│  Nginx (port 443)                                       │
-│  api.egov.theflywheel.in → localhost:18000              │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Kong Gateway (port 18000)                              │
-│                                                         │
-│  /auth/*  → keycloak:8180         (Keycloak login/admin)│
-│  /kc/*    → token-exchange-svc:3000  (JWT→DIGIT proxy)  │
-│  /user/*  → egov-user:8107        (existing DIGIT auth) │
-│  /pgr-services/* → pgr:8080      (direct DIGIT access)  │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
-   Keycloak    token-exchange    DIGIT backends
-   (port 8180)  -svc (port 3000)  (unchanged)
+```text
+Browser -> /identity/v1/* -> identity-bff -> Keycloak OIDC
+                                      \----> existing egov-user API
+
+Onboarding/reconciler -> /internal/identity/v1/* -> identity-bff
+                                                      \-> Keycloak Admin API
+
+Browser -> Kong -> PGR and other DIGIT services (tenant-scoped DIGIT token)
 ```
 
-**Two auth paths coexist:**
-- **Existing**: `/user/oauth/token` → DIGIT's native auth (used by MCP, DIGIT UI, internal services)
-- **New**: `/auth/*` → Keycloak login → `/kc/*` → token-exchange-svc → DIGIT backends
-
-Neither path affects the other. The existing DIGIT auth is fully preserved.
+The identity BFF is independently deployable and has no PGR dependency. The
+older `/kc/*` JWT-to-DIGIT proxy remains available only as a migration path; it
+is not part of the target browser flow.
 
 ## Endpoints
 
@@ -43,6 +27,8 @@ Neither path affects the other. The existing DIGIT auth is fully preserved.
 | `https://api.egov.theflywheel.in/auth/admin/` | Keycloak admin console (all realms) |
 | `https://api.egov.theflywheel.in/auth/realms/{realm}/account/` | User self-service portal (per realm) |
 | `https://api.egov.theflywheel.in/auth/realms/{realm}/.well-known/openid-configuration` | OIDC discovery (per realm) |
+| `https://api.egov.theflywheel.in/identity/v1/*` | Browser-facing identity BFF |
+| `https://api.egov.theflywheel.in/internal/identity/v1/*` | Workload-only identity control plane |
 | `https://api.egov.theflywheel.in/kc/healthz` | Token-exchange-svc health |
 | `https://api.egov.theflywheel.in/kc/<digit-path>` | JWT-protected DIGIT API proxy |
 
@@ -71,7 +57,55 @@ Key environment variables:
 | `KC_DB_URL` | `jdbc:postgresql://postgres-db:5432/keycloak` | Direct DB (not pgbouncer) |
 | `KEYCLOAK_ADMIN_PASSWORD` | `admin` (override via env) | Admin password |
 
-### token-exchange-svc
+### identity-bff
+
+Run the same image with `npm run start:identity` (or
+`node dist/identity-server.js`). This executable initializes only OIDC/JWKS,
+Redis sessions, the egov-user managed-account client, and the Keycloak control plane. It
+does not initialize a DIGIT system token, proxy routes, tenant-realm sync, or
+PGR.
+
+Key environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `KEYCLOAK_BFF_CLIENT_ID` / `KEYCLOAK_BFF_CLIENT_SECRET` | Confidential Authorization Code client |
+| `KEYCLOAK_MAGIC_LINK_CLIENT_ID` / `KEYCLOAK_MAGIC_LINK_CLIENT_SECRET` | Separate confidential client bound to the magic-link browser flow |
+| `KEYCLOAK_ISSUER` | Exact public issuer and browser-facing realm URL |
+| `KEYCLOAK_OIDC_BACKCHANNEL_URL` | Optional private realm URL for token/logout calls |
+| `KEYCLOAK_ORGANIZATION_REALM` | Shared Organizations-enabled realm |
+| `IDENTITY_AUTH_METHODS` | Sign-in methods displayed by the frontend |
+| `IDENTITY_REDIRECT_URI` | Exact Keycloak callback URI |
+| `IDENTITY_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to use the cookie (`IDENTITY_ALLOWED_ORIGIN` remains a single-origin fallback) |
+| `IDENTITY_COOKIE_SAME_SITE` | `Lax` by default; use `None` with a Secure cookie only for an explicitly allowed cross-site development FE |
+| `DIGIT_USER_SERVICE_URL` / `DIGIT_MDMS_SEARCH_URL` | Existing egov-user and MDMS search endpoints (through Kong) |
+| `DIGIT_ADMIN_USERNAME` / `DIGIT_ADMIN_PASSWORD` / `DIGIT_ADMIN_TENANT_ID` | Dedicated `ACCOUNT_ADMIN` employee for managed-account lifecycle only |
+| `DIGIT_MANAGED_BASE_ROLES` / `DIGIT_MANAGED_ROLE_ALLOWLIST` | Roles of BFF-managed per-tenant accounts |
+| `DIGIT_USER_LOGOUT_URL` / `DIGIT_ENC_GENERATE_KEY_URL` | Internal egov-user logout and egov-enc-service key endpoints |
+| `IDENTITY_CONTROL_PLANE_TOKEN` | Workload credential required by provisioning routes |
+| `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` | Comma-separated clients whose Organization-group roles may be managed |
+| `KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` | Dedicated Keycloak Admin service account |
+| `REDIS_HOST` / `REDIS_PORT` | Server-side Keycloak session storage |
+
+### Email and magic-link sign-in
+
+Build the Keycloak image from `keycloak/Dockerfile.magic-link`. It pins Keycloak
+26.7.3 and the Phase Two magic-link extension 0.75, and verifies the downloaded
+JAR checksum before Keycloak augmentation. Set `KEYCLOAK_IMAGE` to that image.
+
+In the BFF's 0600 environment file, enable the method and provide an independent
+magic-link client secret plus the realm SMTP values documented in
+`deploy/digit-compose/identity-bff.env.example`. Then rerun
+`deploy/digit-compose/configure-keycloak.sh`. The script idempotently enables
+email login, installs a dedicated magic-link browser flow, binds its client,
+configures SMTP, and retains the normal password client and flow.
+
+For development, an SMTP catcher such as Mailpit can be used on the Compose
+network. That proves generation and redemption but does not deliver to real
+inboxes. Production must use a real authenticated SMTP relay; do not publish an
+unauthenticated mailbox UI because its messages contain live sign-in links.
+
+### token-exchange-svc (legacy migration path)
 Node.js service that validates Keycloak JWTs and proxies requests to DIGIT backends with injected system auth. Supports multi-realm JWT validation and bidirectional role sync.
 
 Key environment variables:
@@ -79,6 +113,15 @@ Key environment variables:
 |----------|-------|---------|
 | `KEYCLOAK_ISSUER` | `https://api.egov.theflywheel.in/auth/realms/digit-sandbox` | Default realm issuer (fallback for single-realm mode) |
 | `KEYCLOAK_JWKS_URI` | `http://keycloak:8180/auth/realms/...` | Internal URL for fetching signing keys |
+| `KEYCLOAK_AUDIENCE` | `digit-ui` | Expected audience for legacy direct Keycloak-token validation |
+| `KEYCLOAK_BFF_CLIENT_ID` | `digit-identity-bff` | Confidential Authorization Code client used by the identity BFF |
+| `KEYCLOAK_BFF_CLIENT_SECRET` | `dev-only-change-me` | BFF client secret; must be overridden outside local development |
+| `KEYCLOAK_BFF_AUDIENCE` | BFF client ID | Required audience for BFF access tokens |
+| `IDENTITY_REDIRECT_URI` | `http://localhost:18200/identity/v1/callback` | Exact Keycloak callback URI |
+| `IDENTITY_POST_LOGIN_REDIRECT` | `/` | Fixed browser destination after successful callback |
+| `IDENTITY_ALLOWED_ORIGINS` | `http://localhost:3000` | Browser origins allowed to send the identity cookie |
+| `IDENTITY_COOKIE_SAME_SITE` | `Lax` | Cookie SameSite policy; `None` requires HTTPS/Secure and is intended for cross-site development |
+| `IDENTITY_COOKIE_SECURE` | `true` | Set `false` only for local HTTP development |
 | `DIGIT_USER_HOST` | `http://egov-user:8107` | DIGIT user service |
 | `DIGIT_SYSTEM_USERNAME` | `ADMIN` | System account for forwarding requests |
 | `REDIS_HOST` | `redis` | Cache for resolved users |
@@ -103,7 +146,8 @@ postgres-db (healthy)
 │   └── keycloak (starts, imports realm, ~30-45s to healthy)
 ├── pgbouncer → egov-user (healthy)
 └── redis (healthy)
-    └── token-exchange-svc (needs keycloak + redis + egov-user)
+    ├── identity-bff (needs keycloak + redis; PGR-independent)
+    └── token-exchange-svc (legacy; needs keycloak + redis + egov-user)
 ```
 
 Kong doesn't depend on the Keycloak services — it handles 502s gracefully until they're ready.
@@ -213,10 +257,12 @@ See [role-management.md](role-management.md) for detailed role management docume
 
 ## Realm Configuration
 
-### Realm-per-Tenant Architecture
+### Legacy Realm-per-Tenant Provisioning
 
-Instead of a single `digit-sandbox` realm, the system now provisions **one realm per
-DIGIT state root** using a template. The `digit-sandbox` realm export
+The existing startup synchronizer provisions **one realm per DIGIT state root**
+using a template. This remains during migration. The target identity-BFF model
+uses one shared realm with Keycloak Organizations mapped to DIGIT root tenants.
+The `digit-sandbox` realm export
 (`keycloak/realm-export.json`) is used for Keycloak's initial import on first boot.
 Subsequent realms are created dynamically from `keycloak/realm-template.json`.
 
@@ -245,6 +291,27 @@ Each realm gets a `digit-ui` public OIDC client (from the template):
 - **Flow**: Authorization Code + PKCE (no client secret)
 - **Redirect URIs**: `http://localhost:*`, `https://*.egov.theflywheel.in/*`
 - **Web Origins**: `http://localhost:3000`, `http://localhost:5173`, `https://*.egov.theflywheel.in`
+
+### Organizations and tenant choices
+
+The realm templates enable Organizations and attach the built-in optional
+`organization` scope to the UI client. The Organization membership mapper emits
+the immutable Organization ID. The Organization group mapper emits group paths
+and their realm/client roles inside each Organization claim.
+
+Clients request `organization:*` to obtain every Organization membership needed
+by the chooser. `GET /identity/v1/tenants` sends only those signed immutable
+Organization IDs plus the verified `(issuer, subject)` to the durable DIGIT
+identity API. That API returns the active Organization-to-tenant mapping and
+tenant-local roles. Static environment mappings are not authoritative and are
+not used by the v1 browser route.
+
+The BFF handles `/authorize`, `/callback`, `/session`, `/tenants`, and `/logout`.
+Keycloak access, refresh, and ID tokens remain in Redis; the browser receives
+only an opaque `HttpOnly` session cookie (`SameSite=Lax` by default). Access tokens refresh
+server-side when needed, and logout deletes the Redis session and revokes the
+Keycloak refresh token. Persisted active DIGIT membership still needs to be
+added as a further tenant-options filter before production cutover.
 
 ### Groups (City Tenants)
 

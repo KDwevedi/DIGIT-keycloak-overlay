@@ -34,17 +34,25 @@ export async function getAdminToken(): Promise<string> {
     return cachedAdminToken;
   }
 
+  const credentials = new URLSearchParams({
+    grant_type: config.keycloakAdminClientSecret
+      ? "client_credentials"
+      : "password",
+    client_id: config.keycloakAdminClientId,
+  });
+  if (config.keycloakAdminClientSecret) {
+    credentials.set("client_secret", config.keycloakAdminClientSecret);
+  } else {
+    credentials.set("username", config.keycloakAdminUsername);
+    credentials.set("password", config.keycloakAdminPassword);
+  }
   const resp = await fetch(
-    `${config.keycloakAdminUrl}/realms/master/protocol/openid-connect/token`,
+    `${config.keycloakAdminUrl}/realms/${encodeURIComponent(config.keycloakAdminRealm)}` +
+      "/protocol/openid-connect/token",
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "password",
-        client_id: config.keycloakAdminClientId,
-        username: config.keycloakAdminUsername,
-        password: config.keycloakAdminPassword,
-      }).toString(),
+      body: credentials.toString(),
     }
   );
 

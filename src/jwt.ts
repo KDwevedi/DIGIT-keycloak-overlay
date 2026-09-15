@@ -50,6 +50,7 @@ export function initJwks(jwksUri?: string) {
 
 export async function validateJwt(
   authHeader: string | undefined,
+  options?: { issuer?: string; audience?: string },
 ): Promise<KCClaims | null> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
@@ -59,12 +60,17 @@ export async function validateJwt(
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
     const iss = payload.iss as string;
     if (!iss) return null;
+    if (options?.issuer && iss !== options.issuer) return null;
 
     const realm = iss.split("/realms/").pop();
     if (!realm) return null;
 
     const jwks = getJwks(realm);
-    const { payload: verified } = await jwtVerify(token, jwks, { issuer: iss });
+    const { payload: verified } = await jwtVerify(token, jwks, {
+      issuer: options?.issuer || iss,
+      audience: options?.audience || undefined,
+      algorithms: ["RS256"],
+    });
 
     if (!verified.sub) return null;
     // KC's master-realm admin (and some other built-in accounts) often lack
@@ -84,6 +90,10 @@ export async function validateJwt(
       phone_number: (verified.phone_number as string) || undefined,
       realm_access: (verified.realm_access as { roles: string[] }) || undefined,
       groups: (verified.groups as string[]) || undefined,
+      organization:
+        (verified.organization as KCClaims["organization"]) || undefined,
+      nonce: (verified.nonce as string) || undefined,
+      azp: (verified.azp as string) || undefined,
       realm,
     };
   } catch (err) {

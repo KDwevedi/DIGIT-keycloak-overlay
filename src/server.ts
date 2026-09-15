@@ -12,9 +12,10 @@ import { initRoutes } from "./routes.js";
 import { proxyRequest, forwardToGateway } from "./proxy.js";
 import { searchKeycloakUser, createKeycloakUser, getAdminToken, deriveKcPassword } from "./keycloak-admin.js";
 import { initKcAdmin, stopKcAdminRefresh, syncTenantRealms } from "./kc-admin.js";
-import { installLogDrain, queryLogs, clearLogs, logCount } from "./log-drain.js";
 import { searchUserByUserName, getSystemToken } from "./digit-client.js";
 import { registerPlatformAdminRoutes } from "./platform-admin.js";
+import { registerIdentityRoutes } from "./identity-routes.js";
+import { registerIdentityControlRoutes } from "./identity-control-routes.js";
 
 // Decode JWT payload without verification (for extracting sub from KC access tokens)
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -87,35 +88,10 @@ export async function createApp() {
     }
   });
 
-  // Log drain API — view recent logs via HTTP
-  // GET /logs?last=100&level=error&filter=PROXY&since=2026-03-24T00:00:00Z&format=text
-  app.get("/logs", (_req, res) => {
-    const last = _req.query.last ? parseInt(_req.query.last as string) : undefined;
-    const level = _req.query.level as string | undefined;
-    const filter = _req.query.filter as string | undefined;
-    const since = _req.query.since as string | undefined;
-    const format = _req.query.format as string | undefined;
-
-    const entries = queryLogs({ last, level, filter, since });
-
-    if (format === "text") {
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      const lines = entries.map(e => `${e.ts} [${e.level.toUpperCase().padEnd(5)}] ${e.msg}`);
-      return res.send(lines.join("\n") + "\n");
-    }
-
-    res.json({ count: entries.length, total: logCount(), entries });
-  });
-
-  app.post("/logs/clear", (_req, res) => {
-    clearLogs();
-    res.json({ cleared: true });
-  });
-
   // Request logger — every request gets logged
   app.use((req, _res, next) => {
     const authHeader = req.headers.authorization ? "yes" : "no";
-    const bodyToken = req.body?.RequestInfo?.authToken ? `yes (${req.body.RequestInfo.authToken.slice(0, 20)}...)` : "no";
+    const bodyToken = req.body?.RequestInfo?.authToken ? "yes" : "no";
     console.log(`[REQ] ${req.method} ${req.originalUrl} | Auth header: ${authHeader} | Body authToken: ${bodyToken}`);
     next();
   });
@@ -196,12 +172,22 @@ export async function createApp() {
 
   // CORS for browser requests
   app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = _req.headers.origin;
+    if (_req.path.startsWith("/identity/v1") && origin && config.identityAllowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Vary", "Origin");
+    } else if (!_req.path.startsWith("/identity/v1")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (_req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
+
+  registerIdentityRoutes(app);
+  registerIdentityControlRoutes(app);
 
   // Register endpoint: create user in Keycloak
   app.post("/register", async (req, res) => {
@@ -559,7 +545,6 @@ const isMain =
   process.argv[1]?.endsWith("server.js");
 if (isMain) {
   (async () => {
-    installLogDrain(); // Capture all console output before anything else
     initJwks();
     initCache();
     initRoutes();
