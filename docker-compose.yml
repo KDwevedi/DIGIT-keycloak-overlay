@@ -5,7 +5,10 @@ services:
       - "6379:6379"
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7.3
+    image: digit-keycloak-magic-link:26.7.3-0.75
+    build:
+      context: .
+      dockerfile: keycloak/Dockerfile.magic-link
     command: start-dev --import-realm
     environment:
       KC_HOSTNAME_STRICT: "false"
@@ -31,6 +34,8 @@ services:
       KEYCLOAK_BFF_CLIENT_ID: digit-identity-bff
       KEYCLOAK_BFF_CLIENT_SECRET: ${KEYCLOAK_BFF_CLIENT_SECRET:-dev-only-change-me}
       KEYCLOAK_BFF_AUDIENCE: digit-identity-bff
+      KEYCLOAK_MAGIC_LINK_CLIENT_ID: digit-identity-bff-magic-link
+      KEYCLOAK_MAGIC_LINK_CLIENT_SECRET: ${KEYCLOAK_MAGIC_LINK_CLIENT_SECRET:-dev-only-magic-link-change-me}
       KEYCLOAK_ADMIN_URL: http://keycloak:8180
       KEYCLOAK_ADMIN_USERNAME: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
@@ -40,6 +45,7 @@ services:
       IDENTITY_POST_LOGIN_REDIRECT: http://localhost:3000/
       IDENTITY_ALLOWED_ORIGIN: http://localhost:3000
       IDENTITY_COOKIE_SECURE: "false"
+      IDENTITY_AUTH_METHODS: '[{"id":"password","label":"Email and password","type":"password"},{"id":"magic_link","label":"Email me a sign-in link","type":"magic_link"}]'
       IDENTITY_CONTROL_PLANE_TOKEN: ${IDENTITY_CONTROL_PLANE_TOKEN:-local-control-plane-token}
       DIGIT_IDENTITY_SERVICE_URL: ${DIGIT_IDENTITY_SERVICE_URL:-}
       DIGIT_IDENTITY_SERVICE_TOKEN: ${DIGIT_IDENTITY_SERVICE_TOKEN:-}

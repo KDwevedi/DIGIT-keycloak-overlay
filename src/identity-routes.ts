@@ -4,6 +4,7 @@ import {
   authorizationUrl,
   exchangeAuthorizationCode,
   logoutFromKeycloak,
+  oidcClientForMethod,
   refreshIdentityTokens,
   verifyIdentityAccessToken,
   verifyIdentityIdToken,
@@ -124,7 +125,10 @@ export async function currentSession(
   }
 
   try {
-    const tokens = await refreshIdentityTokens(session.refreshToken);
+    const tokens = await refreshIdentityTokens(
+      session.refreshToken,
+      session.oidcClientId || config.keycloakBffClientId,
+    );
     const claims = await verifyIdentityAccessToken(tokens.accessToken);
     if (claims.sub !== session.claims.sub) {
       throw new Error("Refreshed token changed subject");
@@ -136,7 +140,13 @@ export async function currentSession(
         Math.floor((session.refreshExpiresAt - Date.now()) / 1000),
       );
     }
-    await saveIdentitySession(sessionId, tokens, claims);
+    await saveIdentitySession(
+      sessionId,
+      tokens,
+      claims,
+      undefined,
+      session.oidcClientId || config.keycloakBffClientId,
+    );
     session = (await getIdentitySession(sessionId))!;
     return { sessionId, session };
   } catch (error) {
@@ -179,11 +189,12 @@ export function registerIdentityRoutes(app: express.Application): void {
     const method = methods.find((candidate) => candidate.id === requestedMethod);
     if (!method) return res.status(400).json({ error: "Unsupported sign-in method" });
 
-    const { state, codeChallenge, nonce } = await createLoginAttempt();
+    const oidcClient = oidcClientForMethod(method.type);
+    const { state, codeChallenge, nonce } = await createLoginAttempt(oidcClient.clientId);
     res.setHeader("Set-Cookie", loginCookie(state));
     return res.redirect(
       302,
-      authorizationUrl(state, codeChallenge, nonce, method.idpHint),
+      authorizationUrl(state, codeChallenge, nonce, oidcClient.clientId, method.idpHint),
     );
   }));
 
@@ -202,13 +213,25 @@ export function registerIdentityRoutes(app: express.Application): void {
     }
 
     try {
-      const tokens = await exchangeAuthorizationCode(code, attempt.codeVerifier);
+      const tokens = await exchangeAuthorizationCode(
+        code,
+        attempt.codeVerifier,
+        attempt.oidcClientId,
+      );
       const claims = await verifyIdentityAccessToken(tokens.accessToken);
-      const idClaims = await verifyIdentityIdToken(tokens.idToken, attempt.nonce);
+      const idClaims = await verifyIdentityIdToken(
+        tokens.idToken,
+        attempt.nonce,
+        attempt.oidcClientId,
+      );
       if (idClaims.sub !== claims.sub) {
         throw new Error("Keycloak token subjects do not match");
       }
-      const { sessionId, maxAge } = await createIdentitySession(tokens, claims);
+      const { sessionId, maxAge } = await createIdentitySession(
+        tokens,
+        claims,
+        attempt.oidcClientId,
+      );
       await resolveTenantContexts(claims).catch((error) => {
         console.warn("DIGIT account resolution after sign-in failed:", (error as Error).message);
       });
@@ -330,7 +353,10 @@ export function registerIdentityRoutes(app: express.Application): void {
             console.warn("DIGIT token revocation failed:", (error as Error).message);
           });
       }
-      await logoutFromKeycloak(session?.refreshToken).catch((error) => {
+      await logoutFromKeycloak(
+        session?.refreshToken,
+        session?.oidcClientId || config.keycloakBffClientId,
+      ).catch((error) => {
         console.warn("Keycloak logout failed:", (error as Error).message);
       });
     }

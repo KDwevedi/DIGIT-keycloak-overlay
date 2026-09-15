@@ -70,6 +70,7 @@ Key environment variables:
 | Variable | Purpose |
 |----------|---------|
 | `KEYCLOAK_BFF_CLIENT_ID` / `KEYCLOAK_BFF_CLIENT_SECRET` | Confidential Authorization Code client |
+| `KEYCLOAK_MAGIC_LINK_CLIENT_ID` / `KEYCLOAK_MAGIC_LINK_CLIENT_SECRET` | Separate confidential client bound to the magic-link browser flow |
 | `KEYCLOAK_ISSUER` | Exact public issuer and browser-facing realm URL |
 | `KEYCLOAK_OIDC_BACKCHANNEL_URL` | Optional private realm URL for token/logout calls |
 | `KEYCLOAK_ORGANIZATION_REALM` | Shared Organizations-enabled realm |
@@ -85,6 +86,24 @@ Key environment variables:
 | `KEYCLOAK_ALLOWED_ORG_ROLE_CLIENTS` | Comma-separated clients whose Organization-group roles may be managed |
 | `KEYCLOAK_ADMIN_CLIENT_ID` / `KEYCLOAK_ADMIN_CLIENT_SECRET` | Dedicated Keycloak Admin service account |
 | `REDIS_HOST` / `REDIS_PORT` | Server-side Keycloak session storage |
+
+### Email and magic-link sign-in
+
+Build the Keycloak image from `keycloak/Dockerfile.magic-link`. It pins Keycloak
+26.7.3 and the Phase Two magic-link extension 0.75, and verifies the downloaded
+JAR checksum before Keycloak augmentation. Set `KEYCLOAK_IMAGE` to that image.
+
+In the BFF's 0600 environment file, enable the method and provide an independent
+magic-link client secret plus the realm SMTP values documented in
+`deploy/digit-compose/identity-bff.env.example`. Then rerun
+`deploy/digit-compose/configure-keycloak.sh`. The script idempotently enables
+email login, installs a dedicated magic-link browser flow, binds its client,
+configures SMTP, and retains the normal password client and flow.
+
+For development, an SMTP catcher such as Mailpit can be used on the Compose
+network. That proves generation and redemption but does not deliver to real
+inboxes. Production must use a real authenticated SMTP relay; do not publish an
+unauthenticated mailbox UI because its messages contain live sign-in links.
 
 ### token-exchange-svc (legacy migration path)
 Node.js service that validates Keycloak JWTs and proxies requests to DIGIT backends with injected system auth. Supports multi-realm JWT validation and bidirectional role sync.

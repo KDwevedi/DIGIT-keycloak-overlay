@@ -11,6 +11,7 @@ import type {
 interface LoginAttempt {
   codeVerifier: string;
   nonce: string;
+  oidcClientId: string;
 }
 
 function randomId(): string {
@@ -29,7 +30,7 @@ function contextKey(sessionId: string): string {
   return `${config.cachePrefix}:identity:context:${sessionId}`;
 }
 
-export async function createLoginAttempt(): Promise<{
+export async function createLoginAttempt(oidcClientId: string): Promise<{
   state: string;
   codeVerifier: string;
   codeChallenge: string;
@@ -43,7 +44,7 @@ export async function createLoginAttempt(): Promise<{
     .digest("base64url");
   await getRedis().set(
     loginKey(state),
-    JSON.stringify({ codeVerifier, nonce } satisfies LoginAttempt),
+    JSON.stringify({ codeVerifier, nonce, oidcClientId } satisfies LoginAttempt),
     "EX",
     config.identityLoginTtlSeconds,
   );
@@ -58,7 +59,8 @@ export async function consumeLoginAttempt(
   try {
     const attempt = JSON.parse(raw) as LoginAttempt;
     return typeof attempt.codeVerifier === "string" &&
-      typeof attempt.nonce === "string" ? attempt : null;
+      typeof attempt.nonce === "string" &&
+      typeof attempt.oidcClientId === "string" ? attempt : null;
   } catch {
     return null;
   }
@@ -72,10 +74,11 @@ function sessionTtl(tokens: IdentityTokenSet): number {
 export async function createIdentitySession(
   tokens: IdentityTokenSet,
   claims: KCClaims,
+  oidcClientId: string,
 ): Promise<{ sessionId: string; maxAge: number }> {
   const sessionId = randomId();
   const maxAge = sessionTtl(tokens);
-  await saveIdentitySession(sessionId, tokens, claims, maxAge);
+  await saveIdentitySession(sessionId, tokens, claims, maxAge, oidcClientId);
   return { sessionId, maxAge };
 }
 
@@ -84,10 +87,12 @@ export async function saveIdentitySession(
   tokens: IdentityTokenSet,
   claims: KCClaims,
   ttl = sessionTtl(tokens),
+  oidcClientId?: string,
 ): Promise<void> {
   const now = Date.now();
   const session: IdentitySession = {
     claims,
+    ...(oidcClientId && { oidcClientId }),
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
     accessExpiresAt: now + tokens.accessExpiresIn * 1000,

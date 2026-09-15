@@ -40,6 +40,19 @@ tokens stay in Redis behind a random HttpOnly cookie. `SameSite=Lax` is the
 default; a cross-site development frontend may set `IDENTITY_COOKIE_SAME_SITE=None`
 with a Secure cookie and an explicit `IDENTITY_ALLOWED_ORIGINS` entry.
 
+Password accepts either username or email. Magic link uses a second confidential
+Keycloak client bound to an email-only browser flow; this keeps the realm's
+normal password flow unchanged. The BFF stores the selected OIDC client with the
+one-time login attempt and opaque session, so callback exchange, refresh, and
+logout use the correct client without exposing either client secret. The method
+is advertised only when that Keycloak client exists, is enabled, and
+`KEYCLOAK_MAGIC_LINK_CLIENT_SECRET` is configured.
+
+Magic-link email is a single-use bearer credential valid for 10 minutes by
+default. Keycloak may create a previously unknown email user, but DIGIT account
+creation and tenant access still require Organization membership and the normal
+managed-account rules; receiving a link grants no tenant by itself.
+
 `contexts/_select` response:
 
 ```json

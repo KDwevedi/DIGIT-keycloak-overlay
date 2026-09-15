@@ -76,6 +76,12 @@ function getOrCreateRealm(name: string): RealmState {
             name: role,
           })),
         }],
+        ["digit-identity-bff-magic-link", {
+          id: "digit-identity-bff-magic-link-uuid",
+          clientId: "digit-identity-bff-magic-link",
+          enabled: true,
+          roles: [],
+        }],
       ]),
     };
     realms.set(name, realm);

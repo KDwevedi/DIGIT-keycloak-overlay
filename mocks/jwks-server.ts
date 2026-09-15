@@ -79,8 +79,10 @@ export function createJwksApp() {
     async (req, res) => {
       const grantType = req.body.grant_type;
       const validClient =
-        req.body.client_id === "digit-identity-bff" &&
-        req.body.client_secret === "test-bff-secret";
+        (req.body.client_id === "digit-identity-bff" &&
+          req.body.client_secret === "test-bff-secret") ||
+        (req.body.client_id === "digit-identity-bff-magic-link" &&
+          req.body.client_secret === "test-magic-secret");
       const code = String(req.body.code || "");
       const nonce = code.startsWith("valid-code:")
         ? code.slice("valid-code:".length)
@@ -104,6 +106,7 @@ export function createJwksApp() {
           resource_access: { "digit-ui": { roles: ["PGR_VIEWER", "NOT_ALLOWLISTED"] } },
         },
       };
+      const clientId = String(req.body.client_id);
       const accessToken = await signJwt({
         sub: "identity-user-1",
         email: "person@example.com",
@@ -111,7 +114,7 @@ export function createJwksApp() {
         preferred_username: "demo.person",
         email_verified: true,
         phone_number: "0712345678",
-        azp: "digit-identity-bff",
+        azp: clientId,
         aud: "digit-identity-bff",
         organization: organizations,
       });
@@ -119,7 +122,7 @@ export function createJwksApp() {
         sub: "identity-user-1",
         email: "person@example.com",
         name: "Demo Person",
-        aud: "digit-identity-bff",
+        aud: clientId,
         nonce: grantType === "authorization_code" ? nonce : undefined,
       });
       return res.json({

@@ -2,6 +2,31 @@ import { config } from "./config.js";
 import { validateJwt } from "./jwt.js";
 import type { IdentityTokenSet, KCClaims } from "./types.js";
 
+interface OidcClient {
+  clientId: string;
+  clientSecret: string;
+}
+
+export function oidcClientForMethod(type: "password" | "oauth" | "magic_link"): OidcClient {
+  return type === "magic_link"
+    ? {
+      clientId: config.keycloakMagicLinkClientId,
+      clientSecret: config.keycloakMagicLinkClientSecret,
+    }
+    : {
+      clientId: config.keycloakBffClientId,
+      clientSecret: config.keycloakBffClientSecret,
+    };
+}
+
+function oidcClient(clientId: string): OidcClient {
+  if (clientId === config.keycloakMagicLinkClientId && config.keycloakMagicLinkClientSecret) {
+    return oidcClientForMethod("magic_link");
+  }
+  if (clientId === config.keycloakBffClientId) return oidcClientForMethod("password");
+  throw new Error("Unknown identity OIDC client");
+}
+
 function oidcUrl(path: string, backchannel = false): string {
   const base = backchannel
     ? config.keycloakOidcBackchannelUrl
@@ -13,11 +38,12 @@ export function authorizationUrl(
   state: string,
   codeChallenge: string,
   nonce: string,
+  clientId: string,
   idpHint?: string,
 ): string {
   const url = new URL(oidcUrl("auth"));
   const params = new URLSearchParams({
-    client_id: config.keycloakBffClientId,
+    client_id: clientId,
     redirect_uri: config.identityRedirectUri,
     response_type: "code",
     scope: config.identityScope,
@@ -31,9 +57,10 @@ export function authorizationUrl(
   return url.toString();
 }
 
-async function tokenRequest(params: URLSearchParams): Promise<IdentityTokenSet> {
-  params.set("client_id", config.keycloakBffClientId);
-  params.set("client_secret", config.keycloakBffClientSecret);
+async function tokenRequest(params: URLSearchParams, clientId: string): Promise<IdentityTokenSet> {
+  const client = oidcClient(clientId);
+  params.set("client_id", client.clientId);
+  params.set("client_secret", client.clientSecret);
 
   const response = await fetch(oidcUrl("token", true), {
     method: "POST",
@@ -66,11 +93,12 @@ async function tokenRequest(params: URLSearchParams): Promise<IdentityTokenSet> 
 export async function verifyIdentityIdToken(
   idToken: string | undefined,
   expectedNonce: string,
+  clientId: string,
 ): Promise<KCClaims> {
   if (!idToken) throw new Error("Keycloak did not return an ID token");
   const claims = await validateJwt(`Bearer ${idToken}`, {
     issuer: config.keycloakIssuer,
-    audience: config.keycloakBffClientId,
+    audience: clientId,
   });
   if (!claims || claims.nonce !== expectedNonce) {
     throw new Error("Keycloak returned an invalid ID token");
@@ -81,22 +109,24 @@ export async function verifyIdentityIdToken(
 export function exchangeAuthorizationCode(
   code: string,
   codeVerifier: string,
+  clientId: string,
 ): Promise<IdentityTokenSet> {
   return tokenRequest(new URLSearchParams({
     grant_type: "authorization_code",
     code,
     redirect_uri: config.identityRedirectUri,
     code_verifier: codeVerifier,
-  }));
+  }), clientId);
 }
 
 export function refreshIdentityTokens(
   refreshToken: string,
+  clientId = config.keycloakBffClientId,
 ): Promise<IdentityTokenSet> {
   return tokenRequest(new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-  }));
+  }), clientId);
 }
 
 export async function verifyIdentityAccessToken(
@@ -110,14 +140,18 @@ export async function verifyIdentityAccessToken(
   return claims;
 }
 
-export async function logoutFromKeycloak(refreshToken?: string): Promise<void> {
+export async function logoutFromKeycloak(
+  refreshToken?: string,
+  clientId = config.keycloakBffClientId,
+): Promise<void> {
   if (!refreshToken) return;
+  const client = oidcClient(clientId);
   const response = await fetch(oidcUrl("logout", true), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: config.keycloakBffClientId,
-      client_secret: config.keycloakBffClientSecret,
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
       refresh_token: refreshToken,
     }).toString(),
   });

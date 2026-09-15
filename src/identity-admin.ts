@@ -59,6 +59,20 @@ export async function enabledIdentityProviderAliases(): Promise<Set<string>> {
   ));
 }
 
+/** Enabled OIDC clients used to hide methods whose Keycloak flow is not installed yet. */
+export async function enabledIdentityClientIds(clientIds: string[]): Promise<Set<string>> {
+  const enabled = new Set<string>();
+  await Promise.all([...new Set(clientIds)].map(async (clientId) => {
+    const query = new URLSearchParams({ clientId, search: "true" });
+    const response = await request(`/clients?${query}`);
+    const clients = await response.json() as Array<{ clientId?: string; enabled?: boolean }>;
+    if (clients.some((client) => client.clientId === clientId && client.enabled !== false)) {
+      enabled.add(clientId);
+    }
+  }));
+  return enabled;
+}
+
 function realmPath(path: string): string {
   return `/admin/realms/${encodeURIComponent(config.keycloakOrganizationRealm)}${path}`;
 }

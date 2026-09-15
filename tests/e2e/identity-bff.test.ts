@@ -32,6 +32,8 @@ beforeAll(async () => {
   (config as any).keycloakBffClientId = "digit-identity-bff";
   (config as any).keycloakBffClientSecret = "test-bff-secret";
   (config as any).keycloakBffAudience = "digit-identity-bff";
+  (config as any).keycloakMagicLinkClientId = "digit-identity-bff-magic-link";
+  (config as any).keycloakMagicLinkClientSecret = "test-magic-secret";
   (config as any).identityRedirectUri =
     "http://localhost:18200/identity/v1/callback";
   (config as any).identityPostLoginRedirect = "/after-login";
@@ -41,6 +43,7 @@ beforeAll(async () => {
   (config as any).identityAuthMethods = [
     { id: "password", label: "Password", type: "password" },
     { id: "google", label: "Google", type: "oauth", idpHint: "google" },
+    { id: "magic_link", label: "Email me a sign-in link", type: "magic_link" },
   ];
   Object.assign(config as any, {
     cachePrefix: `identity-e2e-${process.pid}`,
@@ -173,6 +176,7 @@ describe("identity BFF", () => {
     expect(await methods.json()).toEqual({ methods: [
       { id: "password", label: "Password", type: "password" },
       { id: "google", label: "Google", type: "oauth", idpHint: "google" },
+      { id: "magic_link", label: "Email me a sign-in link", type: "magic_link" },
     ] });
 
     const unknown = await fetch(
@@ -180,6 +184,35 @@ describe("identity BFF", () => {
       { redirect: "manual" },
     );
     expect(unknown.status).toBe(400);
+
+    const magic = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/authorize?method=magic_link`,
+      { redirect: "manual" },
+    );
+    expect(magic.status).toBe(302);
+    const magicUrl = new URL(magic.headers.get("location")!);
+    expect(magicUrl.searchParams.get("client_id")).toBe(
+      "digit-identity-bff-magic-link",
+    );
+    expect(magicUrl.searchParams.has("client_secret")).toBe(false);
+    expect(magicUrl.searchParams.has("kc_idp_hint")).toBe(false);
+    const magicState = magicUrl.searchParams.get("state")!;
+    const magicNonce = magicUrl.searchParams.get("nonce")!;
+    const magicLoginCookie = magic.headers.get("set-cookie")!.split(";", 1)[0];
+    const callback = await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/callback?code=valid-code:${encodeURIComponent(magicNonce)}&state=${encodeURIComponent(magicState)}`,
+      { redirect: "manual", headers: { Cookie: magicLoginCookie } },
+    );
+    expect(callback.status).toBe(303);
+    const magicSessionCookie = callback.headers.getSetCookie()
+      .find((value) => value.startsWith("digit_identity_session="))!
+      .split(";", 1)[0];
+    // The mock access token expires immediately. Refresh proves the session
+    // retained the magic-link client instead of falling back to the password client.
+    expect((await fetch(
+      `http://localhost:${getAppPort()}/identity/v1/session`,
+      { headers: { Cookie: magicSessionCookie } },
+    )).status).toBe(200);
   });
 
   it("does not accept a browser-supplied Keycloak token as a session", async () => {

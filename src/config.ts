@@ -45,7 +45,7 @@ export function parseIdentityAuthMethods(raw: string): IdentityAuthMethod[] {
     const idpHint = typeof candidate.idpHint === "string"
       ? candidate.idpHint.trim()
       : undefined;
-    if (type !== "password" && !idpHint) {
+    if (type === "oauth" && !idpHint) {
       throw new Error(`IDENTITY_AUTH_METHODS[${index}].idpHint is required`);
     }
     seen.add(id);
@@ -86,6 +86,10 @@ export const config = {
     process.env.KEYCLOAK_BFF_CLIENT_SECRET || "dev-only-change-me",
   keycloakBffAudience:
     process.env.KEYCLOAK_BFF_AUDIENCE || keycloakBffClientId,
+  keycloakMagicLinkClientId:
+    process.env.KEYCLOAK_MAGIC_LINK_CLIENT_ID || "digit-identity-bff-magic-link",
+  keycloakMagicLinkClientSecret:
+    process.env.KEYCLOAK_MAGIC_LINK_CLIENT_SECRET || "",
 
   // Identity BFF
   identityRedirectUri:

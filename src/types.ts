@@ -49,6 +49,8 @@ export interface SelectedIdentityContext {
 
 export interface IdentitySession {
   claims: KCClaims;
+  /** OIDC client that created this session; absent on sessions created before multi-flow support. */
+  oidcClientId?: string;
   accessToken: string;
   refreshToken?: string;
   accessExpiresAt: number;

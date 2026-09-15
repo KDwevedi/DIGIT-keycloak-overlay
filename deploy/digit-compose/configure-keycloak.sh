@@ -16,12 +16,18 @@ readonly BFF_CLIENT=digit-identity-bff
 readonly RETIRED_ASSERTION_AUDIENCE=digit-identity-exchange
 readonly ADMIN_CLIENT=digit-identity-admin
 readonly ROLE_CLIENT=digit-ui
+readonly MAGIC_LINK_FLOW=digit-magic-link-browser
+readonly MAGIC_LINK_FORMS=digit-magic-link-forms
 
 set -a
 # shellcheck disable=SC1091
 . "$IDENTITY_ENV_DIR/identity-bff.env"
 set +a
 readonly REALM=${KEYCLOAK_ORGANIZATION_REALM:?set KEYCLOAK_ORGANIZATION_REALM}
+readonly MAGIC_LINK_CLIENT=${KEYCLOAK_MAGIC_LINK_CLIENT_ID:-digit-identity-bff-magic-link}
+readonly ALLOWED_ORIGINS=${IDENTITY_ALLOWED_ORIGINS:-${IDENTITY_ALLOWED_ORIGIN:-}}
+readonly ALLOWED_ORIGINS_JSON=$(printf '%s' "$ALLOWED_ORIGINS" | jq -Rc \
+  'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
 
 temporary_admin=false
 if [ -z "${KC_BOOTSTRAP_ADMIN_USERNAME:-}" ] || [ -z "${KC_BOOTSTRAP_ADMIN_PASSWORD:-}" ]; then
@@ -95,6 +101,111 @@ ensure_mapper() {
   fi
 }
 
+flow_uuid() {
+  kc get authentication/flows -r "$REALM" |
+    jq -r --arg alias "$1" '.[] | select(.alias == $alias) | .id' | head -1
+}
+
+ensure_execution() {
+  local flow=$1 provider=$2 requirement=$3 execution
+  execution=$(kc get "authentication/flows/$flow/executions" -r "$REALM" |
+    jq -c --arg provider "$provider" '.[] | select(.providerId == $provider)' | head -1)
+  if [ -z "$execution" ]; then
+    kc create "authentication/flows/$flow/executions/execution" -r "$REALM" \
+      -s "provider=$provider" >/dev/null
+    execution=$(kc get "authentication/flows/$flow/executions" -r "$REALM" |
+      jq -c --arg provider "$provider" '.[] | select(.providerId == $provider)' | head -1)
+  fi
+  printf '%s' "$execution" | jq --arg requirement "$requirement" \
+    '.requirement = $requirement' |
+    docker exec -i "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh \
+      update "authentication/flows/$flow/executions" -r "$REALM" -f - \
+      --config "$KC_CONFIG" >/dev/null
+}
+
+configure_magic_link() {
+  : "${KEYCLOAK_MAGIC_LINK_CLIENT_SECRET:?set KEYCLOAK_MAGIC_LINK_CLIENT_SECRET}"
+  : "${KEYCLOAK_SMTP_HOST:?set KEYCLOAK_SMTP_HOST}"
+  : "${KEYCLOAK_SMTP_FROM:?set KEYCLOAK_SMTP_FROM}"
+
+  local smtp_auth=${KEYCLOAK_SMTP_AUTH:-false}
+  local smtp_port=${KEYCLOAK_SMTP_PORT:-587}
+  local smtp_ssl=${KEYCLOAK_SMTP_SSL:-false}
+  local smtp_starttls=${KEYCLOAK_SMTP_STARTTLS:-true}
+  local smtp_from_name=${KEYCLOAK_SMTP_FROM_DISPLAY_NAME:-DIGIT Identity}
+  local smtp_user=${KEYCLOAK_SMTP_USER:-}
+  local smtp_password=${KEYCLOAK_SMTP_PASSWORD:-}
+
+  kc get "realms/$REALM" |
+    jq --arg host "$KEYCLOAK_SMTP_HOST" --arg port "$smtp_port" \
+      --arg from "$KEYCLOAK_SMTP_FROM" --arg from_name "$smtp_from_name" \
+      --arg auth "$smtp_auth" --arg ssl "$smtp_ssl" --arg starttls "$smtp_starttls" \
+      --arg user "$smtp_user" --arg password "$smtp_password" \
+      '.loginWithEmailAllowed = true |
+       .registrationEmailAsUsername = true |
+       .duplicateEmailsAllowed = false |
+       .smtpServer = {host:$host, port:$port, from:$from,
+         fromDisplayName:$from_name, auth:$auth, ssl:$ssl, starttls:$starttls} |
+       if $user != "" then .smtpServer.user = $user else . end |
+       if $password != "" then .smtpServer.password = $password else . end' |
+    docker exec -i "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh \
+      update "realms/$REALM" -f - --config "$KC_CONFIG" >/dev/null
+
+  if [ -z "$(flow_uuid "$MAGIC_LINK_FLOW")" ]; then
+    kc create authentication/flows -r "$REALM" \
+      -s "alias=$MAGIC_LINK_FLOW" \
+      -s 'description=Passwordless email magic-link browser flow' \
+      -s providerId=basic-flow -s topLevel=true -s builtIn=false >/dev/null
+  fi
+  ensure_execution "$MAGIC_LINK_FLOW" auth-cookie ALTERNATIVE
+
+  if [ -z "$(flow_uuid "$MAGIC_LINK_FORMS")" ]; then
+    kc create "authentication/flows/$MAGIC_LINK_FLOW/executions/flow" -r "$REALM" \
+      -s "alias=$MAGIC_LINK_FORMS" -s 'description=Magic link email form' \
+      -s provider=registration-page -s type=basic-flow >/dev/null
+  fi
+  local forms_execution
+  forms_execution=$(kc get "authentication/flows/$MAGIC_LINK_FLOW/executions" -r "$REALM" |
+    jq -c --arg display "$MAGIC_LINK_FORMS" '.[] | select(.displayName == $display)' | head -1)
+  printf '%s' "$forms_execution" | jq '.requirement = "ALTERNATIVE"' |
+    docker exec -i "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh \
+      update "authentication/flows/$MAGIC_LINK_FLOW/executions" -r "$REALM" -f - \
+      --config "$KC_CONFIG" >/dev/null
+
+  ensure_execution "$MAGIC_LINK_FORMS" ext-magic-form REQUIRED
+  local magic_execution magic_execution_id magic_config_id
+  magic_execution=$(kc get "authentication/flows/$MAGIC_LINK_FORMS/executions" -r "$REALM" |
+    jq -c '.[] | select(.providerId == "ext-magic-form")' | head -1)
+  magic_execution_id=$(printf '%s' "$magic_execution" | jq -r .id)
+  magic_config_id=$(printf '%s' "$magic_execution" | jq -r '.authenticationConfig // empty')
+  if [ -z "$magic_config_id" ]; then
+    kc create "authentication/executions/$magic_execution_id/config" -r "$REALM" \
+      -s alias=digit-magic-link-config \
+      -s 'config."ext-magic-create-nonexistent-user"=true' \
+      -s 'config."ext-magic-update-profile-action"=false' \
+      -s 'config."ext-magic-update-password-action"=false' \
+      -s 'config."ext-magic-allow-token-reuse"=false' \
+      -s 'config."ext-magic-token-life-span"=600' >/dev/null
+  fi
+
+  local magic_uuid magic_flow_id
+  magic_uuid=$(ensure_client "$MAGIC_LINK_CLIENT" "$KEYCLOAK_MAGIC_LINK_CLIENT_SECRET" false)
+  magic_flow_id=$(flow_uuid "$MAGIC_LINK_FLOW")
+  kc update "clients/$magic_uuid" -r "$REALM" \
+    -s standardFlowEnabled=true \
+    -s "redirectUris=[\"$IDENTITY_REDIRECT_URI\"]" \
+    -s "webOrigins=$ALLOWED_ORIGINS_JSON" \
+    -s 'attributes."pkce.code.challenge.method"=S256' \
+    -s 'attributes."post.logout.redirect.uris"=+' \
+    -s "authenticationFlowBindingOverrides.browser=$magic_flow_id" >/dev/null
+
+  ensure_mapper "clients/$magic_uuid" digit-identity-bff-audience oidc-audience-mapper \
+    -s "config.\"included.client.audience\"=$BFF_CLIENT" \
+    -s 'config."id.token.claim"=false' -s 'config."access.token.claim"=true'
+  kc update "clients/$magic_uuid/optional-client-scopes/$organization_scope" \
+    -r "$REALM" -n >/dev/null
+}
+
 # A new realm gets conservative defaults; an existing realm is only switched
 # to Organizations so operator-tuned settings are preserved.
 if kc get "realms/$REALM" >/dev/null 2>&1; then
@@ -119,9 +230,9 @@ bff_uuid=$(ensure_client "$BFF_CLIENT" "$KEYCLOAK_BFF_CLIENT_SECRET" false)
 kc update "clients/$bff_uuid" -r "$REALM" \
   -s standardFlowEnabled=true \
   -s "redirectUris=[\"$IDENTITY_REDIRECT_URI\"]" \
-  -s "webOrigins=[\"$IDENTITY_ALLOWED_ORIGIN\"]" \
+  -s "webOrigins=$ALLOWED_ORIGINS_JSON" \
   -s 'attributes."pkce.code.challenge.method"=S256' \
-  -s "attributes.\"post.logout.redirect.uris\"=$IDENTITY_ALLOWED_ORIGIN/*" \
+  -s 'attributes."post.logout.redirect.uris"=+' \
   -s 'attributes."standard.token.exchange.enabled"=false' >/dev/null
 
 retired_uuid=$(client_uuid "$RETIRED_ASSERTION_AUDIENCE")
@@ -158,6 +269,10 @@ ensure_mapper "client-scopes/$organization_scope" 'organization groups' \
   -s 'config."addGroupRoleMappings"=true'
 kc update "clients/$bff_uuid/optional-client-scopes/$organization_scope" -r "$REALM" -n >/dev/null
 
+if [ "${KEYCLOAK_MAGIC_LINK_ENABLED:-false}" = true ]; then
+  configure_magic_link
+fi
+
 admin_uuid=$(ensure_client "$ADMIN_CLIENT" "$KEYCLOAK_ADMIN_CLIENT_SECRET" true)
 service_user=$(kc get "clients/$admin_uuid/service-account-user" -r "$REALM" | jq -r '.id')
 management_uuid=$(client_uuid realm-management)
@@ -179,5 +294,5 @@ for role in EMPLOYEE SUPERUSER GRO PGR_LME DGRO CSR SUPERVISOR \
   fi
 done
 
-printf 'realm=%s organizations=enabled bff_client=%s admin_client=%s temporary_admin_removed=%s\n' \
-  "$REALM" "$BFF_CLIENT" "$ADMIN_CLIENT" "$temporary_admin"
+printf 'realm=%s organizations=enabled bff_client=%s magic_link=%s admin_client=%s temporary_admin_removed=%s\n' \
+  "$REALM" "$BFF_CLIENT" "${KEYCLOAK_MAGIC_LINK_ENABLED:-false}" "$ADMIN_CLIENT" "$temporary_admin"

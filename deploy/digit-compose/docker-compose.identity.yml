@@ -9,7 +9,7 @@
 #   IDENTITY_ENV_DIR      directory holding the env files below
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7.3
+    image: ${KEYCLOAK_IMAGE:-digit-keycloak-magic-link:26.7.3-0.75}
     command: ["start"]
     # Replace the legacy start-dev environment: no KEYCLOAK_ADMIN bootstrap
     # account is created from a persisted file. A temporary admin is created
