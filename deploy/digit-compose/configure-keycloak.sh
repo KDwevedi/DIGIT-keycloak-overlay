@@ -159,12 +159,14 @@ configure_magic_link() {
   fi
   ensure_execution "$MAGIC_LINK_FLOW" auth-cookie ALTERNATIVE
 
-  if [ -z "$(flow_uuid "$MAGIC_LINK_FORMS")" ]; then
+  local forms_execution
+  forms_execution=$(kc get "authentication/flows/$MAGIC_LINK_FLOW/executions" -r "$REALM" |
+    jq -c --arg display "$MAGIC_LINK_FORMS" '.[] | select(.displayName == $display)' | head -1)
+  if [ -z "$forms_execution" ]; then
     kc create "authentication/flows/$MAGIC_LINK_FLOW/executions/flow" -r "$REALM" \
       -s "alias=$MAGIC_LINK_FORMS" -s 'description=Magic link email form' \
       -s provider=registration-page -s type=basic-flow >/dev/null
   fi
-  local forms_execution
   forms_execution=$(kc get "authentication/flows/$MAGIC_LINK_FLOW/executions" -r "$REALM" |
     jq -c --arg display "$MAGIC_LINK_FORMS" '.[] | select(.displayName == $display)' | head -1)
   printf '%s' "$forms_execution" | jq '.requirement = "ALTERNATIVE"' |
