@@ -51,7 +51,9 @@ is advertised only when that Keycloak client exists, is enabled, and
 Magic-link email is a single-use bearer credential valid for 10 minutes by
 default. Keycloak may create a previously unknown email user, but DIGIT account
 creation and tenant access still require Organization membership and the normal
-managed-account rules; receiving a link grants no tenant by itself.
+managed-account rules; receiving a link grants no tenant by itself. A newly
+created Keycloak user completes the standard first-name/last-name profile screen
+once before the callback. Existing users go directly from the link to callback.
 
 `contexts/_select` response:
 
