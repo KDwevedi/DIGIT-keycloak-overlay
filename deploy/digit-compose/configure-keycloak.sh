@@ -142,7 +142,7 @@ configure_magic_link() {
       --arg auth "$smtp_auth" --arg ssl "$smtp_ssl" --arg starttls "$smtp_starttls" \
       --arg user "$smtp_user" --arg password "$smtp_password" \
       '.loginWithEmailAllowed = true |
-       .registrationEmailAsUsername = true |
+       .registrationEmailAsUsername = false |
        .duplicateEmailsAllowed = false |
        .smtpServer = {host:$host, port:$port, from:$from,
          fromDisplayName:$from_name, auth:$auth, ssl:$ssl, starttls:$starttls} |
