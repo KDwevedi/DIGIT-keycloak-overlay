@@ -27,6 +27,42 @@ interface UserRepresentation {
   firstName?: string;
   lastName?: string;
   enabled?: boolean;
+  attributes?: Record<string, string[]>;
+}
+
+const MANAGED_TENANTS_ATTRIBUTE = "digit.managedTenants";
+
+export async function managedTenantsFromIdentity(userId: string): Promise<string[]> {
+  const response = await request(`/users/${encodeURIComponent(userId)}`);
+  const user = await response.json() as UserRepresentation;
+  return [...new Set(user.attributes?.[MANAGED_TENANTS_ATTRIBUTE] || [])].sort();
+}
+
+/** Durable account inventory; Redis is only an acceleration index. */
+export async function listManagedIdentityAccounts(): Promise<Array<{
+  subject: string;
+  tenantId: string;
+}>> {
+  const users = await paged<UserRepresentation>("/users");
+  return users.flatMap((user) => user.id
+    ? [...new Set(user.attributes?.[MANAGED_TENANTS_ATTRIBUTE] || [])]
+        .map((tenantId) => ({ subject: user.id!, tenantId }))
+    : []);
+}
+
+/** Durable inventory used to deactivate accounts after Organization removal. */
+export async function recordManagedTenant(userId: string, tenantId: string): Promise<void> {
+  const response = await request(`/users/${encodeURIComponent(userId)}`);
+  const user = await response.json() as UserRepresentation;
+  const tenants = [...new Set([...(user.attributes?.[MANAGED_TENANTS_ATTRIBUTE] || []), tenantId])].sort();
+  if (tenants.length === (user.attributes?.[MANAGED_TENANTS_ATTRIBUTE] || []).length) return;
+  await request(`/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      ...user,
+      attributes: { ...user.attributes, [MANAGED_TENANTS_ATTRIBUTE]: tenants },
+    }),
+  });
 }
 
 export interface IdentityUserProfile {
@@ -134,6 +170,34 @@ function mappedTenant(organization: OrganizationRepresentation): string | null {
   return Array.isArray(values) && values.length === 1 ? values[0] : null;
 }
 
+function attribute(organization: OrganizationRepresentation, name: string): string | null {
+  const values = organization.attributes?.[name];
+  return Array.isArray(values) && values.length === 1 ? values[0] : null;
+}
+
+const normalizedName = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
+
+/** Live collision check for identifiers persisted on Keycloak Organizations. */
+export async function organizationIdentifierAvailable(type: string, value: string): Promise<boolean> {
+  const organizations = await paged<OrganizationRepresentation>(
+    "/organizations?briefRepresentation=false",
+  );
+  const normalized = type === "ACCOUNT_CODE" ? value.trim().toUpperCase()
+    : type === "ORGANIZATION_NAME" ? normalizedName(value)
+      : value.trim().toLowerCase();
+  return !organizations.some((organization) => {
+    if (type === "ORGANIZATION_NAME") return normalizedName(organization.name || "") === normalized;
+    if (type === "ORGANIZATION_ALIAS") return organization.alias?.toLowerCase() === normalized;
+    if (type === "URL_SLUG") {
+      return organization.alias?.toLowerCase() === normalized ||
+        attribute(organization, "digit.urlSlug")?.toLowerCase() === normalized;
+    }
+    if (type === "ACCOUNT_CODE") return attribute(organization, "digit.accountCode")?.toUpperCase() === normalized;
+    if (type === "TENANT_ID") return mappedTenant(organization)?.toLowerCase() === normalized;
+    throw new IdentityAdminError("Unsupported identifier type", 400);
+  });
+}
+
 async function organizationsForTenant(
   tenantId: string,
 ): Promise<OrganizationRepresentation[]> {
@@ -194,6 +258,8 @@ export async function ensureOrganization(input: {
   tenantId: string;
   alias: string;
   name: string;
+  accountCode?: string;
+  urlSlug?: string;
 }): Promise<{ id: string; tenantId: string; alias: string; name: string }> {
   let matches = await organizationsForTenant(input.tenantId);
   if (matches.length > 1) {
@@ -208,7 +274,11 @@ export async function ensureOrganization(input: {
         name: input.name,
         alias: input.alias,
         enabled: true,
-        attributes: { "digit.rootTenantId": [input.tenantId] },
+        attributes: {
+          "digit.rootTenantId": [input.tenantId],
+          ...(input.accountCode && { "digit.accountCode": [input.accountCode] }),
+          ...(input.urlSlug && { "digit.urlSlug": [input.urlSlug] }),
+        },
       }),
     }, [201]);
     const location = response.headers.get("location");
@@ -231,7 +301,9 @@ export async function ensureOrganization(input: {
     );
   }
 
-  if (organization.name !== input.name || organization.enabled === false) {
+  if (organization.name !== input.name || organization.enabled === false ||
+      (input.accountCode && attribute(organization, "digit.accountCode") !== input.accountCode) ||
+      (input.urlSlug && attribute(organization, "digit.urlSlug") !== input.urlSlug)) {
     await request(`/organizations/${encodeURIComponent(organization.id)}`, {
       method: "PUT",
       body: JSON.stringify({
@@ -242,6 +314,8 @@ export async function ensureOrganization(input: {
         attributes: {
           ...organization.attributes,
           "digit.rootTenantId": [input.tenantId],
+          ...(input.accountCode && { "digit.accountCode": [input.accountCode] }),
+          ...(input.urlSlug && { "digit.urlSlug": [input.urlSlug] }),
         },
       }),
     });
@@ -356,7 +430,11 @@ export async function ensureOrganizationRoleAssignment(input: {
   if (!config.keycloakAllowedOrganizationRoleClients.includes(input.clientId)) {
     throw new IdentityAdminError("Keycloak client is not allowed for Organization roles", 400);
   }
-  const group = await ensureOrganizationGroup(input.organizationId, input.groupName);
+  // This endpoint is per-user. Give the assignment its own Organization group
+  // so changing one user's requested roles never rewrites a shared group's
+  // role mappings for every other member.
+  const assignmentGroup = `${input.groupName.slice(0, 180)}--${input.userId}`;
+  const group = await ensureOrganizationGroup(input.organizationId, assignmentGroup);
   await request(
     `/organizations/${encodeURIComponent(input.organizationId)}` +
       `/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(input.userId)}`,

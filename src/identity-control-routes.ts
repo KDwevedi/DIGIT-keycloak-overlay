@@ -6,6 +6,7 @@ import {
   ensureOrganizationMembership,
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
+  organizationIdentifierAvailable,
   readOrganizationMapping,
 } from "./identity-admin.js";
 import { currentSession } from "./identity-routes.js";
@@ -52,8 +53,9 @@ function handleAdminError(error: unknown, res: express.Response) {
 export function registerIdentityControlRoutes(app: express.Application): void {
   app.use("/internal/identity/v1", (req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
-    const introspection = req.path === "/sessions/_introspect";
-    const expected = introspection
+    const onboardingRead = req.path === "/sessions/_introspect" ||
+      req.path === "/identifiers/_check";
+    const expected = onboardingRead
       ? config.identitySessionIntrospectionToken
       : config.identityControlPlaneToken;
     if (!expected) {
@@ -105,6 +107,21 @@ export function registerIdentityControlRoutes(app: express.Application): void {
         preferredUsername: claims.preferred_username,
       },
     });
+  }));
+
+  app.post("/internal/identity/v1/identifiers/_check", asyncRoute(async (req, res) => {
+    try {
+      const type = requiredString(req.body?.type, "type").toUpperCase();
+      const value = requiredString(req.body?.value, "value");
+      let available = await organizationIdentifierAvailable(type, value);
+      if (available && type === "TENANT_ID") {
+        clearTenantCaches();
+        available = !await isActiveDigitTenant(value.toLowerCase());
+      }
+      return res.json({ type, value, available });
+    } catch (error) {
+      return handleAdminError(error, res);
+    }
   }));
 
   // Adds Keycloak Organization membership, then resolves the member's managed

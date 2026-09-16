@@ -35,6 +35,35 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
   const tokens = new Map<string, { uuid: string; expiresAt: number }>();
   const stats = { adminLogins: 0, userLogins: 0, creates: 0, updates: 0, passwordUpdates: 0, logouts: 0 };
   const receivedPasswords: string[] = [];
+  const bootstrapSchemaCodes = [
+    "tenant.tenants", "tenant.OnboardingConfig", "ACCESSCONTROL-ROLES.roles",
+    "ACCESSCONTROL-ACTIONS-TEST.actions-test", "ACCESSCONTROL-ROLEACTIONS.roleactions",
+    "common-masters.IdFormat", "common-masters.Department", "DataSecurity.DecryptionABAC",
+    "DataSecurity.EncryptionPolicy", "DataSecurity.SecurityPolicy", "DataSecurity.MaskingPatterns",
+    "common-masters.Designation", "common-masters.StateInfo", "common-masters.GenderType",
+    "common-masters.ThemeConfig", "egov-hrms.EmployeeStatus", "egov-hrms.EmployeeType",
+    "egov-hrms.DeactivationReason", "Workflow.BusinessService", "INBOX.InboxQueryConfiguration",
+    "dss.DashboardConfig",
+  ];
+  const schemas = new Map<string, Map<string, any>>([
+    ["pg", new Map(bootstrapSchemaCodes.map((code) => [code, {
+      tenantId: "pg", code, description: code, definition: { type: "object", additionalProperties: true }, isActive: true,
+    }]))],
+  ]);
+  const mdms = new Map<string, any[]>();
+  const mdmsKey = (tenantId: string, schemaCode: string) => `${tenantId}|${schemaCode}`;
+  mdms.set(mdmsKey("pg", "common-masters.StateInfo"), [{
+    tenantId: "pg", schemaCode: "common-masters.StateInfo", uniqueIdentifier: "state-info",
+    data: { code: "PG", name: "Bootstrap", languages: [{ label: "ENGLISH", value: "en_IN" }] }, isActive: true,
+  }]);
+  mdms.set(mdmsKey("pg", "ACCESSCONTROL-ROLES.roles"), [{
+    tenantId: "pg", schemaCode: "ACCESSCONTROL-ROLES.roles", uniqueIdentifier: "gro",
+    data: { code: "GRO", name: "GRO" }, isActive: true,
+  }]);
+  const workflows = new Map<string, any[]>([["pg", [{
+    tenantId: "pg", businessService: "PGR", business: "pgr", businessServiceSla: 1,
+    states: [{ uuid: "start", state: "PENDING", isStartState: true, actions: [] }],
+  }]]]);
   let nextId = 1;
   let tokenTtlSeconds = 604800;
 
@@ -136,17 +165,44 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     return res.json({ status: "ok" });
   });
 
-  app.post("/mdms-v2/v2/_create/tenant.tenants", (req, res) => {
+  app.post("/mdms-v2/schema/v1/_search", (req, res) => {
+    const tenantId = req.body?.SchemaDefCriteria?.tenantId;
+    return res.json({ SchemaDefinitions: [...(schemas.get(tenantId)?.values() || [])] });
+  });
+
+  app.post("/mdms-v2/schema/v1/_create", (req, res) => {
+    const caller = bearer(req);
+    if (!caller) return res.status(401).json({ error: "invalid token" });
+    const value = req.body?.SchemaDefinition;
+    if (!value?.tenantId || !value?.code) return res.status(400).json({ error: "invalid schema" });
+    const tenantSchemas = schemas.get(value.tenantId) || new Map();
+    if (tenantSchemas.has(value.code)) return res.status(409).json({ error: "duplicate" });
+    tenantSchemas.set(value.code, value);
+    schemas.set(value.tenantId, tenantSchemas);
+    return res.json({ SchemaDefinitions: [value] });
+  });
+
+  app.post("/mdms-v2/v2/_create/:schemaCode", (req, res) => {
     const caller = bearer(req);
     if (!caller) return res.status(401).json({ error: "invalid token" });
     if (!caller.roles.some((role) => role.code === "MDMS_ADMIN")) return res.status(403).json({ error: "forbidden" });
-    const code = req.body?.Mdms?.data?.code;
-    if (!code || !req.body?.Mdms?.data?.name || req.body?.Mdms?.tenantId !== code.split(".")[0]) {
-      return res.status(400).json({ error: "invalid tenant" });
+    const value = req.body?.Mdms;
+    if (!value?.tenantId || value.schemaCode !== req.params.schemaCode || !value.uniqueIdentifier) {
+      return res.status(400).json({ error: "invalid record" });
     }
-    if (options.tenants.includes(code)) return res.status(400).json({ error: "DUPLICATE_RECORD" });
-    options.tenants.push(code);
-    return res.json({ mdms: [req.body.Mdms] });
+    const key = mdmsKey(value.tenantId, value.schemaCode);
+    const values = mdms.get(key) || [];
+    if (values.some((record) => record.uniqueIdentifier === value.uniqueIdentifier)) {
+      return res.status(400).json({ error: "DUPLICATE_RECORD" });
+    }
+    values.push(value);
+    mdms.set(key, values);
+    if (value.schemaCode === "tenant.tenants") {
+      const code = value.data?.code;
+      if (!code || !value.data?.name || value.tenantId !== code) return res.status(400).json({ error: "invalid root" });
+      if (!options.tenants.includes(code)) options.tenants.push(code);
+    }
+    return res.json({ mdms: [value] });
   });
 
   const encKeys = new Set<string>();
@@ -160,13 +216,29 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
 
   app.post("/mdms-v2/v1/_search", (req, res) => {
     const root = req.body?.MdmsCriteria?.tenantId;
+    const schemaCode = req.body?.MdmsCriteria?.schemaCode;
+    if (schemaCode) return res.json({ mdms: mdms.get(mdmsKey(root, schemaCode)) || [] });
     return res.json({ MdmsRes: { tenant: { tenants: options.tenants
       .filter((tenant) => tenant.split(".")[0] === root).map((code) => ({ code })) } } });
   });
 
+  app.post("/egov-workflow-v2/egov-wf/businessservice/_search", (req, res) => {
+    return res.json({ BusinessServices: workflows.get(String(req.query.tenantId)) || [] });
+  });
+  app.post("/egov-workflow-v2/egov-wf/businessservice/_create", (req, res) => {
+    const target = String(req.query.tenantId);
+    workflows.set(target, req.body?.BusinessServices || []);
+    return res.json({ BusinessServices: workflows.get(target) });
+  });
+  app.post("/localization/messages/v1/_search", (req, res) => {
+    const module = String(req.query.module);
+    return res.json({ messages: [{ code: `${module.toUpperCase()}_LABEL`, message: module, module, locale: req.query.locale }] });
+  });
+  app.post("/localization/messages/v1/_upsert", (req, res) => res.json({ messages: req.body?.messages || [] }));
+
   let server: Server;
   return {
-    accounts, tokens, stats, receivedPasswords, addAccount, encKeys,
+    accounts, tokens, stats, receivedPasswords, addAccount, encKeys, schemas, mdms, workflows,
     setTokenTtlSeconds(seconds: number) { tokenTtlSeconds = seconds; },
     expireAllTokens() { for (const entry of tokens.values()) entry.expiresAt = Date.now() - 1; },
     async start(): Promise<string> {

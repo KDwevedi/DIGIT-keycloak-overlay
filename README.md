@@ -83,6 +83,7 @@ POST /internal/identity/v1/memberships/_ensure
 POST /internal/identity/v1/role-assignments/_ensure
 POST /internal/identity/v1/reconciliation/_run
 POST /internal/identity/v1/sessions/_introspect
+POST /internal/identity/v1/identifiers/_check
 ```
 
 The three ensure routes are suitable for PGR onboarding, another domain's
@@ -127,20 +128,10 @@ npm run dev
 
 ## Test Summary
 
-35 tests across 10 files:
-
-| Suite | Tests | Coverage |
-|-------|-------|----------|
-| JWT validation | 6 | Valid, expired, missing, garbage tokens |
-| Redis cache | 4 | Set/get, delete, tenant scoping |
-| User resolver | 9 | Provision, cache hit, existing user, sync, tenant scope, role provisioning, role sync |
-| Route mapping | 4 | Path matching, unknown paths |
-| Auth flow (E2E) | 3 | Happy path, no auth, expired |
-| User provisioning (E2E) | 3 | New user, unique mobile numbers, JWT role provisioning |
-| Cache behavior (E2E) | 2 | Cache hit, pre-populated cache |
-| User sync (E2E) | 1 | Name change propagation |
-| Error handling (E2E) | 2 | Garbage token, unknown upstream |
-| Health check (E2E) | 1 | Redis connectivity |
+`npm test` is the release suite for the default identity BFF: OIDC/session and
+tenant selection, managed DIGIT accounts, onboarding worker, Keycloak admin
+credentials, and Redis behavior. The retired generic proxy has an explicitly
+separate `npm run test:legacy` suite and is not part of the BFF release gate.
 
 ## Project Structure
 
@@ -159,7 +150,8 @@ src/
   user-resolver.ts  # KC claims -> DIGIT user (core logic)
   routes.ts         # Path prefix -> upstream mapping
   proxy.ts          # Content-type-aware request forwarding
-  server.ts         # Express app entry point
+  identity-server.ts        # Default narrow BFF entry point
+  server.ts                 # Legacy generic proxy entry point
 mocks/
   jwks-server.ts    # RSA key pair + JWKS endpoint for tests
   egov-user.ts      # In-memory egov-user mock
@@ -186,6 +178,6 @@ keycloak/
   that user, and returns
   the normal DIGIT login response. Legacy locally managed employees are never
   touched, and the admin token is never used for business calls
-- **Legacy executable retained during migration**: the older generic reverse
-  proxy still has its own system-token/lazy-provisioning code and tests, but the
-  standalone identity BFF does not use that path
+- **Legacy executable isolated during migration**: it is available only through
+  `npm run start:legacy` (and `npm run test:legacy`); the image and normal npm
+  lifecycle default to the narrow identity BFF.

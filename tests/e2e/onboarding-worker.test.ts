@@ -60,7 +60,7 @@ function operation(id: string, subject: string, slug: string, mobileNumber?: str
     Signup: {
       id: `signup-${id}`, ownerIssuer: getIssuer(), ownerSubject: subject,
       accountName: `${slug} council`, accountCode: slug.toUpperCase(), organizationAlias: slug,
-      requestedTenantId: `pg.${slug}`, countryCode: "KE",
+      requestedTenantId: slug, countryCode: "KE",
       tenantMetadata: mobileNumber ? { founder: { mobileNumber, countryCode } } : {},
     },
   };
@@ -83,6 +83,9 @@ beforeAll(async () => {
     digitUserServiceUrl: `${digitBase}/user`,
     digitMdmsSearchUrl: `${digitBase}/mdms-v2/v1/_search`,
     digitMdmsCreateUrl: `${digitBase}/mdms-v2/v2/_create`,
+    digitMdmsSchemaSearchUrl: `${digitBase}/mdms-v2/schema/v1/_search`,
+    digitMdmsSchemaCreateUrl: `${digitBase}/mdms-v2/schema/v1/_create`,
+    digitFoundationSourceTenant: "pg",
     digitAdminUsername: "BFF-ADMIN", digitAdminPassword: "Adm1n@Secret", digitAdminTenantId: "pg",
     digitProvisionerUsername: "BFF-PROVISIONER", digitProvisionerPassword: "Adm1n@Secret", digitProvisionerTenantId: "pg",
     digitEncGenerateKeyUrl: `${digitBase}/egov-enc-service/crypto/v1/_generatekey`,
@@ -117,13 +120,22 @@ describe("onboarding worker", () => {
       completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "FOUNDER_MEMBERSHIP", "FOUNDER_ROLES", "DIGIT_ACCOUNT"],
     });
     const account = [...digit.accounts.values()].find((candidate) => candidate.name === "New Founder")!;
-    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:pg\.riverside$/);
-    expect(account.tenantId).toBe("pg.riverside");
+    expect(account.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:riverside$/);
+    expect(account.tenantId).toBe("riverside");
     expect(account.mobileNumber).toBe("712345678");
     expect(account.countryCode).toBe("+254");
     expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort())
-      .toEqual(["pg.riverside:EMPLOYEE", "pg.riverside:GRO"]);
-    expect(digit.encKeys.has("pg.riverside")).toBe(true);
+      .toEqual(["riverside:EMPLOYEE", "riverside:GRO"]);
+    expect(digit.encKeys.has("riverside")).toBe(true);
+    expect([...digit.schemas.get("riverside")!.keys()]).toEqual(["tenant.tenants"]);
+    const tenantRecord = digit.mdms.get("riverside|tenant.tenants")?.[0]?.data;
+    expect(tenantRecord).toMatchObject({
+      tenantId: "riverside", code: "riverside", name: "riverside council",
+    });
+    expect(tenantRecord).not.toHaveProperty("type");
+    expect(tenantRecord).not.toHaveProperty("city");
+    expect(digit.mdms.has("riverside|tenant.OnboardingConfig")).toBe(false);
+    expect(digit.workflows.has("riverside")).toBe(false);
 
     // Replaying the same operation (e.g. after a lost lease) is idempotent.
     pgr.queue.push(operation("op-1b", founder, "riverside", "9812345678"));

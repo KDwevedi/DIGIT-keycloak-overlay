@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The identity BFF is a standalone executable (`npm run start:identity`). Its
+The identity BFF is the default executable (`npm start`). Its
 runtime dependencies are Redis, Keycloak, and DIGIT's **existing** egov-user and
 MDMS APIs. It needs no egov-user code change. PGR is not required to start or
 sign in; only the optional onboarding worker calls PGR.
@@ -29,7 +29,7 @@ password.
 | `GET` | `/identity/v1/auth-methods` | Methods configured here and enabled in Keycloak |
 | `GET` | `/identity/v1/authorize?method=...` | Starts Authorization Code + PKCE with state and nonce |
 | `GET` | `/identity/v1/callback` | Validates the callback and creates an opaque cookie session |
-| `GET` | `/identity/v1/session` | Authentication state and selected tenant, never tokens |
+| `GET` | `/identity/v1/session` | Authentication state, opaque-session expiry, and selected tenant; never tokens |
 | `GET` | `/identity/v1/tenants` | Tenants in both Keycloak membership and DIGIT grants |
 | `POST` | `/identity/v1/contexts/_select` | Records the tenant and returns the normal DIGIT login response |
 | `POST` | `/identity/v1/logout` | Revokes the DIGIT token and Keycloak session, clears the cookie |
@@ -72,15 +72,15 @@ A Keycloak Organization maps to one DIGIT tenant through its
 `digit.rootTenantId` attribute, set by `organizations/_ensure` only after the
 tenant exists in DIGIT MDMS `tenant.tenants`. A tenant is offered only when:
 
-1. the signed session claims include that Organization;
+1. live Keycloak state says the user is a member of that Organization;
 2. the Organization is enabled and mapped, and the tenant exists in DIGIT; and
 3. the managed DIGIT account is active and holds roles for that tenant.
 
-Session claims can be one access-token lifetime old, so they never change an
-existing account's roles. Sign-in only creates a missing account from them.
-Role and membership projection comes from live Keycloak state through the
-control plane and reconciliation, and selection re-checks membership live
-through the Keycloak Admin API.
+Callback and tenant discovery are read-only. Account creation happens only in
+the provisioning control plane. Role and membership projection comes from live
+Keycloak state through the control plane and reconciliation. Selection checks
+membership and reconciles roles live before issuing a DIGIT token, so a role
+removal takes effect on the next selection rather than waiting for a scan.
 
 ## Managed DIGIT accounts
 
@@ -147,9 +147,10 @@ calls.
   ones. Revocation calls egov-user `/user/_logout` directly
   (`DIGIT_USER_LOGOUT_URL`), because Kong would evaluate RBAC at the account's
   home tenant.
-- **Reconciliation index:** former members are found through Redis
-  `digit-managed-accounts` (`subject|tenant`). If that key is lost, a removed member is deactivated
-  only when next seen, and cannot be offered the tenant in the meantime.
+- **Reconciliation inventory:** every managed tenant is recorded on the
+  Keycloak user as `digit.managedTenants`. Redis keeps a faster
+  `digit-managed-accounts` index, but a full reconciliation rebuilds from the
+  durable Keycloak attribute and still deactivates former members after Redis loss.
 
 ## Control-plane API
 
@@ -159,6 +160,7 @@ Provisioning routes require `IDENTITY_CONTROL_PLANE_TOKEN` and are idempotent:
 - `POST /internal/identity/v1/memberships/_ensure` — `{organizationId, userId, mobileNumber?}` → `{tenantId, digitUserUuid, created}` for that tenant's account. Adds Keycloak membership, then creates or updates the managed account. `digitUserUuid` input is rejected: legacy employees are not linked.
 - `POST /internal/identity/v1/role-assignments/_ensure` — sets an Organization group's allowlisted client roles and projects them to DIGIT.
 - `POST /internal/identity/v1/reconciliation/_run`
+- `POST /internal/identity/v1/identifiers/_check` — live Organization/tenant collision check; uses the narrower introspection credential.
 
 PGR authenticates an onboarding founder through the narrower
 `POST /internal/identity/v1/sessions/_introspect` with its own
@@ -168,7 +170,7 @@ A provisioning worker should call `organizations/_ensure` →
 `memberships/_ensure` → `role-assignments/_ensure` after it has created the
 tenant foundation.
 
-Startup (`IDENTITY_RECONCILE_ON_STARTUP=true`) and periodic
+Startup reconciliation is on unless `IDENTITY_RECONCILE_ON_STARTUP=false`; periodic
 (`IDENTITY_RECONCILIATION_INTERVAL_SECONDS`) reconciliation take a Redis lease,
 read enabled mapped Organizations and their group roles from Keycloak, and apply
 them to managed accounts through egov-user. Former members are deactivated.
@@ -183,12 +185,11 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
 1. leases a `PENDING` operation with `POST /v2/onboarding/internal/operations/_claim`
    (PGR uses `FOR UPDATE SKIP LOCKED`; an expired lease is re-claimable);
 2. runs idempotent steps, recording each in `completedSteps`:
-   - `TENANT_FOUNDATION`: creates the `tenant.tenants` MDMS record for
-     `requestedTenantId`, using a separate `DIGIT_PROVISIONER_*` credential (an
-     `MDMS_ADMIN` employee, `DIGIT_MDMS_CREATE_URL`), waits for MDMS v2 read-model
-     visibility, and ensures the tenant's encryption key
-     (`DIGIT_ENC_GENERATE_KEY_URL`, idempotent). Without the provisioner
-     credential the tenant must already exist;
+   - `TENANT_FOUNDATION`: creates an independent root with only the copied
+     `tenant.tenants` schema, a root self-record and the encryption key needed by
+     egov-user. It uses a separate `DIGIT_PROVISIONER_*` credential and
+     `DIGIT_MDMS_SCHEMA_*`, `DIGIT_MDMS_CREATE_URL`,
+     `DIGIT_FOUNDATION_SOURCE_TENANT`, and `DIGIT_ENC_GENERATE_KEY_URL`;
    - `ORGANIZATION`: Keycloak Organization `organizationAlias` mapped to the tenant;
    - `FOUNDER_MEMBERSHIP`: adds the signup owner to it;
    - `FOUNDER_ROLES`: `ONBOARDING_FOUNDER_GROUP` with `ONBOARDING_FOUNDER_ROLES`;
@@ -197,12 +198,16 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
      existing managed mobile), and its projected roles;
 3. reports `_complete` (operation `SUCCEEDED`, signup `ACTIVE`) or `_fail` with
    `retryable` (`RETRYABLE_FAILED`; the owner may `_retry`) or terminal
-   (`TERMINAL_FAILED`, identifiers released).
+   (`TERMINAL_FAILED`, identifiers retained as a quarantine because partial
+   Keycloak/DIGIT objects may already exist).
 
 Transient Keycloak/DIGIT/tenant-visibility errors are retryable. Conflicts
 (alias taken, colliding legacy account, missing founder mobile) are terminal.
-Only `tenant.tenants` is provisioned; boundaries, departments, service
-definitions, roles/actions and localization for a new tenant are not.
+No application bootstrap is performed. Apart from the technical tenant schema,
+self-record and encryption key, the root is empty: boundaries, departments,
+service definitions, roles/actions, workflow, localization and dashboard
+configuration are deferred to the management/configuration flow. The PGR signup
+record remains the onboarding metadata/saga snapshot until that flow materializes it.
 A PGR outage only logs a skipped worker cycle.
 
 ## Docker Compose deployment
@@ -222,3 +227,5 @@ employee holding only `ACCOUNT_ADMIN`.
 - Missing PGR has no effect on BFF startup or sign-in.
 - Unavailable egov-user or MDMS still permits OIDC login, but tenant listing and
   selection fail closed with `503`, and no DIGIT token is issued.
+- `/livez` checks only the process, while `/readyz` checks Redis, Keycloak JWKS,
+  MDMS and egov-user reachability. PGR is deliberately not a readiness dependency.

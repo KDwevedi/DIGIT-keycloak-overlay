@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 
+/** Tests for the retired generic Keycloak-to-DIGIT proxy runtime. */
 export default defineConfig({
   test: {
     globals: true,
@@ -7,7 +8,9 @@ export default defineConfig({
     hookTimeout: 30000,
     globalSetup: "./tests/setup.ts",
     setupFiles: ["./tests/worker-setup.ts"],
-    include: [
+    include: ["tests/**/*.test.ts"],
+    exclude: [
+      "tests/integration/**",
       "tests/unit/cache.test.ts",
       "tests/unit/keycloak-admin.test.ts",
       "tests/unit/managed-digit-users.test.ts",
@@ -16,9 +19,6 @@ export default defineConfig({
     ],
     pool: "forks",
     fileParallelism: false,
-    sequence: {
-      // Run unit tests before E2E
-      files: "list",
-    },
+    sequence: { files: "list" },
   },
 });

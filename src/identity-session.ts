@@ -88,6 +88,7 @@ export async function saveIdentitySession(
   claims: KCClaims,
   ttl = sessionTtl(tokens),
   oidcClientId?: string,
+  sessionExpiresAt = Date.now() + ttl * 1000,
 ): Promise<void> {
   const now = Date.now();
   const session: IdentitySession = {
@@ -99,6 +100,7 @@ export async function saveIdentitySession(
     refreshExpiresAt: tokens.refreshExpiresIn
       ? now + tokens.refreshExpiresIn * 1000
       : undefined,
+    sessionExpiresAt,
   };
   await getRedis().set(
     sessionKey(sessionId),

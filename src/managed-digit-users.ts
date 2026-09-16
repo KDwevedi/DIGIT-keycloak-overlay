@@ -2,6 +2,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { getRedis } from "./cache.js";
 import { config } from "./config.js";
 import { withDigitAdmin } from "./digit-admin-token.js";
+import { managedTenantsFromIdentity, recordManagedTenant } from "./identity-admin.js";
 import {
   createAccount,
   type DigitAccount,
@@ -238,10 +239,12 @@ export async function ensureManagedAccount(
       });
       await cacheLogin(identity, login);
       await getRedis().hset(managedAccountsKey(), indexField(identity), identity.issuer);
+      await recordManagedTenant(identity.subject, identity.tenantId);
       return { account: created, created: true, changed: true };
     }
 
     await getRedis().hset(managedAccountsKey(), indexField(identity), identity.issuer);
+    await recordManagedTenant(identity.subject, identity.tenantId);
     if (roleCodes === null) {
       if (!account.active) return { account, created: false, changed: false };
       const updated = await updateAccount(adminToken, { ...editable(account), active: false });
@@ -296,9 +299,13 @@ export async function revokeManagedUserLogins(issuer: string, subject: string): 
 /** Tenants where this BFF has provisioned an account for the subject. */
 export async function managedTenantsOf(issuer: string, subject: string): Promise<string[]> {
   const entries = await getRedis().hgetall(managedAccountsKey());
-  return Object.entries(entries)
+  const cached = Object.entries(entries)
     .filter(([field, owner]) => owner === issuer && field.startsWith(`${subject}|`))
     .map(([field]) => field.slice(subject.length + 1));
+  const durable = issuer === config.keycloakIssuer
+    ? await managedTenantsFromIdentity(subject).catch(() => [] as string[])
+    : [];
+  return [...new Set([...cached, ...durable])].sort();
 }
 
 export async function findManagedAccount(identity: ManagedIdentity): Promise<DigitAccount | null> {

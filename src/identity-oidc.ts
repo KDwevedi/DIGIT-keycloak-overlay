@@ -131,12 +131,16 @@ export function refreshIdentityTokens(
 
 export async function verifyIdentityAccessToken(
   accessToken: string,
+  expectedAuthorizedParty = config.keycloakBffClientId,
 ): Promise<KCClaims> {
   const claims = await validateJwt(`Bearer ${accessToken}`, {
     issuer: config.keycloakIssuer,
     audience: config.keycloakBffAudience,
   });
   if (!claims) throw new Error("Keycloak returned an invalid access token");
+  if (claims.azp !== expectedAuthorizedParty) {
+    throw new Error("Keycloak access token has an invalid authorized party");
+  }
   return claims;
 }
 

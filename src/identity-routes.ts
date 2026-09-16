@@ -33,12 +33,13 @@ import {
   type TenantOption,
 } from "./identity-tenants.js";
 import {
-  ensureManagedAccount,
+  findManagedAccount,
   ManagedAccountError,
   managedIdentity,
   managedUserLogin,
   revokeManagedUserLogins,
 } from "./managed-digit-users.js";
+import { syncSubjectTenant } from "./identity-provisioning.js";
 import type { IdentitySession, KCClaims } from "./types.js";
 import { enabledIdentityMethods } from "./identity-methods.js";
 import { IdentityAdminError, isOrganizationMember } from "./identity-admin.js";
@@ -57,32 +58,19 @@ function publicTenant({ organizationId: _organizationId, ...tenant }: TenantOpti
 
 /**
  * Tenants present in both the session's Organization memberships and the
- * managed DIGIT account's grants. A missing account is created from these
- * claims (fresh at sign-in). An existing account's roles are never changed
- * here: session claims can be stale, so role projection comes only from live
- * Keycloak state through the control plane and reconciliation.
+ * managed DIGIT account's grants. Discovery is deliberately read-only: user
+ * creation and role projection happen through provisioning or explicit
+ * context selection, never from callback/GET routes.
  */
 async function resolveTenantContexts(claims: KCClaims, live = false): Promise<TenantOption[]> {
-  const signedMemberships = await membershipsFromClaims(claims);
-  const signedRoles = new Map(signedMemberships.map((membership) => [membership.tenantId, membership.roles]));
   const memberships = live
     ? await liveMembershipsForSubject(claims.sub)
-    : signedMemberships;
-  const profile = {
-    name: claims.name || claims.preferred_username || "",
-    emailId: claims.email_verified ? claims.email : undefined,
-    mobileNumber: claims.phone_number,
-  };
+    : await membershipsFromClaims(claims);
   const options: TenantOption[] = [];
   for (const membership of memberships) {
-    // One managed DIGIT account per tenant: DIGIT's gateway authorizes a token
-    // only for its account's home tenant.
     const identity = managedIdentity(config.keycloakIssuer, claims.sub, membership.tenantId);
-    const { account } = await ensureManagedAccount(
-      identity, signedRoles.get(membership.tenantId) ?? [], profile, { createOnly: true },
-    ).catch((error) => {
-      // A tenant lacking account prerequisites (e.g. no mobile yet) must not hide the others.
-      if (error instanceof ManagedAccountError) return { account: null };
+    const account = await findManagedAccount(identity).catch((error) => {
+      if (error instanceof ManagedAccountError) return null;
       throw error;
     });
     const option = tenantOption(membership, account);
@@ -129,7 +117,8 @@ export async function currentSession(
       session.refreshToken,
       session.oidcClientId || config.keycloakBffClientId,
     );
-    const claims = await verifyIdentityAccessToken(tokens.accessToken);
+    const oidcClientId = session.oidcClientId || config.keycloakBffClientId;
+    const claims = await verifyIdentityAccessToken(tokens.accessToken, oidcClientId);
     if (claims.sub !== session.claims.sub) {
       throw new Error("Refreshed token changed subject");
     }
@@ -140,12 +129,15 @@ export async function currentSession(
         Math.floor((session.refreshExpiresAt - Date.now()) / 1000),
       );
     }
+    const sessionExpiresAt = session.sessionExpiresAt ||
+      Date.now() + config.identitySessionTtlSeconds * 1000;
     await saveIdentitySession(
       sessionId,
       tokens,
       claims,
-      undefined,
-      session.oidcClientId || config.keycloakBffClientId,
+      Math.max(1, Math.floor((sessionExpiresAt - Date.now()) / 1000)),
+      oidcClientId,
+      sessionExpiresAt,
     );
     session = (await getIdentitySession(sessionId))!;
     return { sessionId, session };
@@ -218,7 +210,7 @@ export function registerIdentityRoutes(app: express.Application): void {
         attempt.codeVerifier,
         attempt.oidcClientId,
       );
-      const claims = await verifyIdentityAccessToken(tokens.accessToken);
+      const claims = await verifyIdentityAccessToken(tokens.accessToken, attempt.oidcClientId);
       const idClaims = await verifyIdentityIdToken(
         tokens.idToken,
         attempt.nonce,
@@ -265,7 +257,7 @@ export function registerIdentityRoutes(app: express.Application): void {
         name: context.name,
         organizationAlias: context.organizationAlias,
       } : null,
-      expiresAt: current.session.accessExpiresAt,
+      expiresAt: current.session.sessionExpiresAt || current.session.accessExpiresAt,
     });
   }));
 
@@ -311,6 +303,14 @@ export function registerIdentityRoutes(app: express.Application): void {
       // membership is still live in Keycloak before issuing DIGIT credentials.
       const subject = current.session.claims.sub;
       if (!await isOrganizationMember(selected.organizationId, subject)) {
+        return res.status(403).json({ error: "Tenant context is not available" });
+      }
+      // Reconcile the selected account from live Organization/group state before
+      // issuing a token, so a role removal is effective on the next selection.
+      const outcome = await syncSubjectTenant(
+        subject, selected.tenantId, current.session.claims.phone_number,
+      );
+      if (!outcome.account?.active) {
         return res.status(403).json({ error: "Tenant context is not available" });
       }
       const login = await managedUserLogin(managedIdentity(config.keycloakIssuer, subject, selected.tenantId));

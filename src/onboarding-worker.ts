@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { config } from "./config.js";
-import { digitProvisionerConfigured, withDigitProvisioner } from "./digit-admin-token.js";
-import { DigitUnauthorizedError, DigitUnavailableError } from "./digit-user-service.js";
+import { digitProvisionerConfigured } from "./digit-admin-token.js";
+import { DigitUnavailableError } from "./digit-user-service.js";
 import {
   ensureOrganization,
   ensureOrganizationMembership,
@@ -9,24 +9,25 @@ import {
   IdentityAdminError,
 } from "./identity-admin.js";
 import { syncSubject } from "./identity-provisioning.js";
-import { clearTenantCaches, isActiveDigitTenant } from "./identity-tenants.js";
+import { clearTenantCaches } from "./identity-tenants.js";
 import { ManagedAccountError } from "./managed-digit-users.js";
+import { ensureTenantFoundation } from "./tenant-foundation.js";
 
 /**
  * Optional in-process worker for submitted PGR onboarding signups.
  *
  * It leases PENDING operations through PGR's workload API (never its
  * database) and provisions, idempotently:
- *   TENANT_FOUNDATION  DIGIT `tenant.tenants` record (MDMS) when a provisioner
- *                      credential is configured, otherwise the tenant must exist;
- *                      plus the tenant's egov-enc-service key when configured
+ *   TENANT_FOUNDATION  independent root tenant schema + self-record and the
+ *                      encryption key needed to create its founder account
  *   ORGANIZATION       Keycloak Organization mapped to the tenant
  *   FOUNDER_MEMBERSHIP founder added to the Organization
  *   FOUNDER_ROLES      founder group with ONBOARDING_FOUNDER_ROLES
  *   DIGIT_ACCOUNT      founder's BFF-managed DIGIT account at the new tenant
  * then reports success, retryable failure or terminal failure back to PGR.
- * Other tenant masters (boundaries, departments, service definitions,
- * localization) are not provisioned here.
+ * Application schemas, masters, workflows, boundaries and localization are
+ * deliberately not provisioned here. The new tenant is identity-ready but
+ * otherwise empty until the management/configuration flow fills it.
  */
 
 interface ClaimedOperation {
@@ -99,83 +100,13 @@ async function settle(path: "_complete" | "_fail", body: Record<string, unknown>
   if (!response.ok) throw new Error(`PGR ${path} returned ${response.status}`);
 }
 
-/** egov-enc-service keys are per tenant and not inherited; PII writes fail without one. */
-async function ensureEncryptionKey(tenantId: string): Promise<void> {
-  if (!config.digitEncGenerateKeyUrl) return;
-  let response: Response;
-  try {
-    response = await fetch(config.digitEncGenerateKeyUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ RequestInfo: { apiId: "digit-identity-bff" }, tenantId }),
-      signal: AbortSignal.timeout(config.digitTimeoutMs),
-    });
-  } catch {
-    throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE", "DIGIT encryption key request failed", true);
-  }
-  await response.body?.cancel();
-  if (!response.ok) {
-    throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
-      `DIGIT encryption key request returned ${response.status}`, true);
-  }
-}
-
-async function ensureTenantFoundation(signup: ClaimedOperation["Signup"]): Promise<void> {
-  const tenantId = signup.requestedTenantId;
-  if (await isActiveDigitTenant(tenantId)) {
-    await ensureEncryptionKey(tenantId);
-    return;
-  }
+async function createTenantFoundation(signup: ClaimedOperation["Signup"]): Promise<void> {
   if (!digitProvisionerConfigured()) {
     throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
-      "The DIGIT tenant does not exist and no tenant provisioner is configured", true);
+      "The tenant foundation provisioner is not configured", true);
   }
-  const root = tenantId.split(".")[0];
-  const status = await withDigitProvisioner(async (token) => {
-    const response = await fetch(`${config.digitMdmsCreateUrl.replace(/\/$/, "")}/tenant.tenants`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        RequestInfo: { apiId: "digit-identity-bff", authToken: token },
-        Mdms: {
-          tenantId: root,
-          schemaCode: "tenant.tenants",
-          isActive: true,
-          data: {
-            code: tenantId,
-            name: signup.accountName,
-            type: "CITY",
-            city: { code: signup.accountCode, name: signup.accountName, districtTenantCode: tenantId },
-            description: "Provisioned by DIGIT identity BFF onboarding",
-          },
-        },
-      }),
-      signal: AbortSignal.timeout(config.digitTimeoutMs),
-    });
-    await response.body?.cancel();
-    if (response.status === 401 || response.status === 403) {
-      throw new DigitUnauthorizedError("DIGIT tenant create was not authorized");
-    }
-    if (!response.ok) {
-      throw new DigitUnavailableError(`DIGIT tenant create returned ${response.status}`);
-    }
-    return response.status;
-  });
-
-  // MDMS v2 acknowledges writes before its Kafka-backed read model is updated.
-  // Wait briefly for visibility so a successful create is not reported to PGR
-  // as a retryable failure that the founder then has to submit again.
-  let visible = false;
-  for (let attempt = 0; attempt < 20 && !visible; attempt += 1) {
-    clearTenantCaches();
-    visible = await isActiveDigitTenant(tenantId);
-    if (!visible) await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  if (!visible) {
-    throw new ProvisioningFailure("TENANT_FOUNDATION_UNAVAILABLE",
-      `DIGIT tenant create returned ${status} and the tenant is not visible yet`, true);
-  }
-  await ensureEncryptionKey(tenantId);
+  await ensureTenantFoundation(signup);
+  clearTenantCaches();
 }
 
 function classify(error: unknown, step: string): ProvisioningFailure {
@@ -209,10 +140,11 @@ export async function processOnboardingOperation(claimed: ClaimedOperation): Pro
       throw new ProvisioningFailure("IDENTITY_ISSUER_MISMATCH", "Signup owner is from another issuer", false);
     }
     let organizationId = "";
-    await run("TENANT_FOUNDATION", () => ensureTenantFoundation(signup));
+    await run("TENANT_FOUNDATION", () => createTenantFoundation(signup));
     await run("ORGANIZATION", async () => {
       organizationId = (await ensureOrganization({
         tenantId: signup.requestedTenantId, alias: signup.organizationAlias, name: signup.accountName,
+        accountCode: signup.accountCode, urlSlug: signup.organizationAlias,
       })).id;
       clearTenantCaches();
     });

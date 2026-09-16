@@ -55,6 +55,8 @@ export interface IdentitySession {
   refreshToken?: string;
   accessExpiresAt: number;
   refreshExpiresAt?: number;
+  /** Absolute lifetime of the opaque browser session. */
+  sessionExpiresAt: number;
 }
 
 export interface DigitUser {

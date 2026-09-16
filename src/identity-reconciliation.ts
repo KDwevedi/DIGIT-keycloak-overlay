@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getRedis } from "./cache.js";
 import { config } from "./config.js";
 import {
+  listManagedIdentityAccounts,
   listOrganizationMappings,
   readOrganizationReconciliation,
 } from "./identity-admin.js";
@@ -95,6 +96,9 @@ export async function runIdentityReconciliation(): Promise<IdentityReconciliatio
       const split = field.lastIndexOf("|");
       if (issuer !== config.keycloakIssuer || split < 0) continue;
       pairs.set(field, { subject: field.slice(0, split), tenantId: field.slice(split + 1) });
+    }
+    for (const pair of await listManagedIdentityAccounts()) {
+      pairs.set(`${pair.subject}|${pair.tenantId}`, pair);
     }
     result.subjects = new Set([...pairs.values()].map((pair) => pair.subject)).size;
     result.accounts = pairs.size;

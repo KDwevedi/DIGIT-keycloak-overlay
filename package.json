@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "dev:identity": "tsx watch src/identity-server.ts",
+    "dev": "tsx watch src/identity-server.ts",
+    "dev:legacy": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
-    "start:identity": "node dist/identity-server.js",
+    "start": "node dist/identity-server.js",
+    "start:legacy": "node dist/server.js",
     "test": "vitest run",
+    "test:legacy": "vitest run --config vitest.legacy.config.ts",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:newman": "newman run tests/postman/kc-e2e.postman_collection.json --env-var keycloakUrl=$LIVE_KC_URL --env-var adminUsername=admin --env-var adminPassword=admin --env-var testRealm=pg --env-var testCity=pg.citya --folder '1. KC Admin & Realm Setup' --folder '2. User Provisioning in KC' --folder '3. OIDC Token Acquisition' --folder '5. Cross-Realm Validation' --folder '6. Cleanup' --reporters cli,junit --reporter-junit-export newman-results.xml"

@@ -125,12 +125,12 @@ export const config = {
   identitySessionIntrospectionToken:
     process.env.IDENTITY_SESSION_INTROSPECTION_TOKEN || "",
   identityReconcileOnStartup:
-    process.env.IDENTITY_RECONCILE_ON_STARTUP === "true",
+    process.env.IDENTITY_RECONCILE_ON_STARTUP !== "false",
   identityReconciliationLeaseSeconds: parseInt(
     process.env.IDENTITY_RECONCILIATION_LEASE_SECONDS || "300",
   ),
   identityReconciliationIntervalSeconds: parseInt(
-    process.env.IDENTITY_RECONCILIATION_INTERVAL_SECONDS || "0",
+    process.env.IDENTITY_RECONCILIATION_INTERVAL_SECONDS || "300",
   ),
 
   // Existing DIGIT user-service contract. The BFF owns only the accounts it
@@ -153,6 +153,16 @@ export const config = {
   digitProvisionerPassword: process.env.DIGIT_PROVISIONER_PASSWORD || "",
   digitProvisionerTenantId: process.env.DIGIT_PROVISIONER_TENANT_ID || "",
   digitMdmsCreateUrl: process.env.DIGIT_MDMS_CREATE_URL || "",
+  digitMdmsSchemaSearchUrl:
+    process.env.DIGIT_MDMS_SCHEMA_SEARCH_URL ||
+    `${(process.env.DIGIT_GATEWAY_HOST || "http://gateway:8080").replace(/\/$/, "")}/mdms-v2/schema/v1/_search`,
+  digitMdmsSchemaCreateUrl:
+    process.env.DIGIT_MDMS_SCHEMA_CREATE_URL ||
+    `${(process.env.DIGIT_GATEWAY_HOST || "http://gateway:8080").replace(/\/$/, "")}/mdms-v2/schema/v1/_create`,
+  digitFoundationSourceTenant:
+    process.env.DIGIT_FOUNDATION_SOURCE_TENANT ||
+    process.env.DIGIT_BOOTSTRAP_SOURCE_TENANT ||
+    "pg",
   // Idempotent egov-enc-service key creation for a new tenant (internal URL).
   digitEncGenerateKeyUrl: process.env.DIGIT_ENC_GENERATE_KEY_URL || "",
   // Optional in-process worker that provisions submitted PGR onboarding operations.

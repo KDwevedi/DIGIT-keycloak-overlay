@@ -28,6 +28,7 @@ beforeAll(async () => {
     digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
     digitTokenRefreshSkewSeconds: 60,
     digitUserLeaseWaitMs: 5000,
+    keycloakOrganizationRealm: "managed-unit",
   });
   initCache(`redis://localhost:${process.env.REDIS_PORT || "16379"}`);
   fake.addAccount({
@@ -44,9 +45,17 @@ afterAll(async () => {
   await fake.stop();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   run += 1;
   fake.setTokenTtlSeconds(604800);
+  await fetch(`${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: subject(), username: subject(), email: `${subject()}@example.org`,
+      firstName: "Managed", lastName: "User", enabled: true, emailVerified: true,
+    }),
+  });
 });
 
 const subject = () => `subject-${run}`;

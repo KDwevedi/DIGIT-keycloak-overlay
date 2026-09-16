@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config } from "../../src/config.js";
 import { getIssuer } from "../helpers.js";
 import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
+import { getRedis } from "../../src/cache.js";
+import { managedAccountsKey } from "../../src/managed-digit-users.js";
 import {
   getIdentityAppPort as getAppPort,
   startIdentityTestApp as startTestApp,
@@ -62,6 +64,10 @@ beforeAll(async () => {
   (config as any).keycloakOrganizationRealm = "digit-sandbox";
   (config as any).keycloakAllowedOrganizationRoleClients = ["digit-ui"];
   await startTestApp();
+  await kcAdmin("/users", {
+    id: "identity-user-1", username: "demo.person", email: "person@example.com",
+    firstName: "Demo", lastName: "Person", enabled: true, emailVerified: true,
+  });
   for (const [id, alias, tenantId, name] of [
     ["org-bomet-id", "bomet", "ke.bomet", "Bomet County"],
     ["org-kisumu-id", "kisumu", "ke.kisumu", "Kisumu County"],
@@ -224,6 +230,29 @@ describe("identity BFF", () => {
   });
 
   it("completes sign-in, refreshes server-side, lists tenants, and logs out", async () => {
+    const controlBase = `http://localhost:${getAppPort()}/internal/identity/v1`;
+    const controlHeaders = {
+      Authorization: "Bearer test-control-plane",
+      "Content-Type": "application/json",
+    };
+    const ensure = (path: string, body: unknown) => fetch(`${controlBase}${path}`, {
+      method: "POST", headers: controlHeaders, body: JSON.stringify(body),
+    });
+    for (const [organizationId, groupName, role] of [
+      ["org-bomet-id", "bomet-officers", "GRO"],
+      ["org-kisumu-id", "kisumu-viewers", "PGR_VIEWER"],
+    ]) {
+      const membership = await ensure("/memberships/_ensure", {
+        organizationId, userId: "identity-user-1", mobileNumber: "0712345678",
+      });
+      expect(membership.status).toBe(200);
+      const assignment = await ensure("/role-assignments/_ensure", {
+        organizationId, userId: "identity-user-1", groupName,
+        clientId: "digit-ui", roles: [role],
+      });
+      expect(assignment.status).toBe(200);
+    }
+
     const authorize = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/authorize?method=google`,
       {
@@ -375,6 +404,7 @@ describe("identity BFF", () => {
     );
     expect(unavailable.status).toBe(403);
 
+    const passwordUpdatesBeforeSelect = digit.stats.passwordUpdates;
     const selected = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/contexts/_select`,
       {
@@ -404,7 +434,8 @@ describe("identity BFF", () => {
     expect(selectedBody.expires_in).toBeGreaterThan(0);
     expect(JSON.stringify(selectedBody)).not.toContain("refresh_token");
     expect(JSON.stringify(selectedBody)).not.toContain("must-not-leak");
-    expect(digit.stats.passwordUpdates).toBe(0);
+    // A revoked cached token is renewed by rotating the BFF-only password once.
+    expect(digit.stats.passwordUpdates - passwordUpdatesBeforeSelect).toBeLessThanOrEqual(1);
 
     const selectedSession = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/session`,
@@ -434,14 +465,24 @@ describe("identity BFF", () => {
       `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}/organizations/${nakuruOrganizationId}/members`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify("identity-user-1") },
     );
-    managedAccount.roles = [...grantedRoles, { code: "GRO", tenantId: "ke.nakuru" }];
+    expect((await ensure("/memberships/_ensure", {
+      organizationId: nakuruOrganizationId,
+      userId: "identity-user-1",
+      mobileNumber: "0712345678",
+    })).status).toBe(200);
+    expect((await ensure("/role-assignments/_ensure", {
+      organizationId: nakuruOrganizationId,
+      userId: "identity-user-1",
+      groupName: "nakuru-officers",
+      clientId: "digit-ui",
+      roles: ["GRO"],
+    })).status).toBe(200);
     const lateMembership = await fetch(
       `http://localhost:${getAppPort()}/identity/v1/tenants`,
       { headers: { Cookie: cookie } },
     );
     expect((await lateMembership.json()).tenants.map((tenant: { tenantId: string }) => tenant.tenantId).sort())
       .toEqual(["ke.bomet", "ke.kisumu", "ke.nakuru"]);
-    managedAccount.roles = grantedRoles;
 
     // Membership is rechecked live in Keycloak, not only from session claims.
     await fetch(
@@ -457,6 +498,13 @@ describe("identity BFF", () => {
       },
     );
     expect(revoked.status).toBe(403);
+
+    // The Keycloak user attribute is the durable inventory. A full scan can
+    // still deactivate the former tenant account after the Redis index is lost.
+    await getRedis().del(managedAccountsKey());
+    const reconciled = await ensure("/reconciliation/_run", {});
+    expect(reconciled.status).toBe(200);
+    expect(managedAccount.active).toBe(false);
 
     // Re-selecting the same tenant is the renewal operation.
     const renewed = await fetch(

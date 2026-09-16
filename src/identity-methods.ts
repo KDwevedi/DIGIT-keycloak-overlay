@@ -9,9 +9,11 @@ export async function enabledIdentityMethods(): Promise<IdentityAuthMethod[]> {
   const needsProviders = config.identityAuthMethods.some((method) => method.type === "oauth");
   const needsMagicLink = config.identityAuthMethods.some((method) => method.type === "magic_link");
   const [providerAliases, clientIds] = await Promise.all([
-    needsProviders ? enabledIdentityProviderAliases() : Promise.resolve(new Set<string>()),
+    needsProviders
+      ? enabledIdentityProviderAliases().catch(() => new Set<string>())
+      : Promise.resolve(new Set<string>()),
     needsMagicLink
-      ? enabledIdentityClientIds([config.keycloakMagicLinkClientId])
+      ? enabledIdentityClientIds([config.keycloakMagicLinkClientId]).catch(() => new Set<string>())
       : Promise.resolve(new Set<string>()),
   ]);
   return config.identityAuthMethods.filter((method) =>

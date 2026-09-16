@@ -9,6 +9,7 @@ interface MockUser {
   lastName?: string;
   enabled: boolean;
   emailVerified: boolean;
+  attributes?: Record<string, string[]>;
 }
 
 interface RealmState {
@@ -212,13 +213,15 @@ export function createKcAdminMock() {
       const matches = realm.users.filter((u) => u.email === emailFilter);
       return res.json(matches);
     }
-    res.json(realm.users);
+    const first = Number(req.query.first || 0);
+    const max = Number(req.query.max || realm.users.length);
+    res.json(realm.users.slice(first, first + max));
   });
 
   // POST /admin/realms/:realm/users — create user
   app.post("/admin/realms/:realm/users", (req, res) => {
     const realm = getOrCreateRealm(req.params.realm);
-    const { username, email, firstName, lastName, enabled, emailVerified } = req.body;
+    const { id, username, email, firstName, lastName, enabled, emailVerified, attributes } = req.body;
     // Check for duplicate by email or username
     const exists = realm.users.some(
       (u) => u.email === email || u.username === username,
@@ -227,13 +230,14 @@ export function createKcAdminMock() {
       return res.status(409).json({ errorMessage: "User exists with same username" });
     }
     const user: MockUser = {
-      id: crypto.randomUUID(),
+      id: id || crypto.randomUUID(),
       username: username || email,
       email,
       firstName,
       lastName,
       enabled: enabled ?? true,
       emailVerified: emailVerified ?? false,
+      attributes,
     };
     realm.users.push(user);
     res.status(201).set("Location", `/admin/realms/${req.params.realm}/users/${user.id}`).end();
@@ -243,6 +247,14 @@ export function createKcAdminMock() {
     const realm = getOrCreateRealm(req.params.realm);
     const user = realm.users.find((candidate) => candidate.id === req.params.userId);
     return user ? res.json(user) : res.status(404).json({ error: "User not found" });
+  });
+
+  app.put("/admin/realms/:realm/users/:userId", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const index = realm.users.findIndex((candidate) => candidate.id === req.params.userId);
+    if (index < 0) return res.status(404).json({ error: "User not found" });
+    realm.users[index] = { ...realm.users[index], ...req.body, id: req.params.userId };
+    return res.status(204).end();
   });
 
   // PUT /admin/realms/:realm/users/:userId/groups/:groupId — add user to group

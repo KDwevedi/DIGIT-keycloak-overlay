@@ -51,3 +51,26 @@ export async function syncSubject(
   }
   return results;
 }
+
+/** Reconciles one explicitly selected tenant from live Keycloak state. */
+export async function syncSubjectTenant(
+  userId: string,
+  tenantId: string,
+  mobileNumber?: string,
+  countryCode?: string,
+): Promise<EnsureResult> {
+  const desired = (await desiredRolesBySubject()).bySubject.get(userId)?.get(tenantId) ?? null;
+  if (desired === null) {
+    return ensureManagedAccount(managedIdentity(config.keycloakIssuer, userId, tenantId), null);
+  }
+  const profile = mobileNumber === undefined
+    ? undefined
+    : {
+        ...await readIdentityUserProfile(userId),
+        mobileNumber: mobileNumber.trim(),
+        ...(countryCode?.trim() && { countryCode: countryCode.trim() }),
+      };
+  return ensureManagedAccount(
+    managedIdentity(config.keycloakIssuer, userId, tenantId), desired, profile,
+  );
+}

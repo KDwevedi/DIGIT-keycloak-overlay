@@ -59,6 +59,7 @@ services:
 
   token-exchange-svc:
     build: .
+    command: ["node", "dist/server.js"]
     environment:
       DIGIT_USER_HOST: http://host.docker.internal:8107
       DIGIT_SYSTEM_USERNAME: INTERNAL_MICROSERVICE_ROLE
