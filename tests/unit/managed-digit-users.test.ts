@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { closeCache, getRedis, initCache } from "../../src/cache.js";
-import { config } from "../../src/config.js";
-import { resetDigitAdminToken } from "../../src/digit-admin-token.js";
+import { closeCache, getRedis, initCache } from "../../src/infrastructure/redis.js";
+import { config } from "../../src/infrastructure/config.js";
+import { resetDigitAdminToken } from "../../src/modules/managed-accounts/digit-admin-session.js";
 import {
   ensureManagedAccount,
   ManagedAccountError,
@@ -9,7 +9,7 @@ import {
   managedUserLogin,
   oneTimePassword,
   revokeManagedUserLogins,
-} from "../../src/managed-digit-users.js";
+} from "../../src/modules/managed-accounts/managed-account-service.js";
 import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
 
 const ISSUER = "https://issuer.example/realms/digit";

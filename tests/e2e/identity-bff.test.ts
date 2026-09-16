@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { config } from "../../src/config.js";
+import { config } from "../../src/infrastructure/config.js";
 import { getIssuer } from "../helpers.js";
 import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
-import { getRedis } from "../../src/cache.js";
-import { managedAccountsKey } from "../../src/managed-digit-users.js";
+import { getRedis } from "../../src/infrastructure/redis.js";
+import { managedAccountsKey } from "../../src/modules/managed-accounts/managed-account-service.js";
 import {
   getIdentityAppPort as getAppPort,
   startIdentityTestApp as startTestApp,

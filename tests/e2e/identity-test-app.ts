@@ -1,9 +1,9 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { closeCache, initCache } from "../../src/cache.js";
-import { config } from "../../src/config.js";
-import { createIdentityApp } from "../../src/identity-app.js";
-import { initJwks } from "../../src/jwt.js";
+import { closeCache, initCache } from "../../src/infrastructure/redis.js";
+import { config } from "../../src/infrastructure/config.js";
+import { createIdentityApp } from "../../src/app/create-app.js";
+import { initJwks } from "../../src/modules/authentication/token-verifier.js";
 
 let server: Server;
 let appPort: number;

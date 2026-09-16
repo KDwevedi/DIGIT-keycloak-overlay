@@ -1,4 +1,4 @@
-# DIGIT Identity BFF / Keycloak Overlay
+# DIGIT Identity BFF
 
 An identity boundary between browsers, DIGIT services, and Keycloak. It owns
 OIDC login, server-side Keycloak sessions, Organization-based tenant selection,
@@ -105,20 +105,19 @@ npm test
 ### Run Full Stack
 
 ```bash
-# Starts Keycloak, Redis, standalone identity BFF, and the legacy exchange proxy
+# Starts Keycloak, Redis, and the identity BFF
 docker compose up -d
 
 # Keycloak admin: http://localhost:18180 (admin/admin)
-# Standalone identity BFF: http://localhost:18201
-# Legacy token exchange: http://localhost:18200
+# Identity BFF: http://localhost:18201
 ```
 
 ### Integrate with DIGIT (tilt-demo)
 
-Point `DIGIT_USER_HOST` at the running egov-user service:
+Point `DIGIT_USER_SERVICE_URL` at the running egov-user service:
 
 ```bash
-DIGIT_USER_HOST=http://localhost:8107 \
+DIGIT_USER_SERVICE_URL=http://localhost:8107/user \
 KEYCLOAK_ISSUER=http://localhost:18180/realms/digit-sandbox \
 KEYCLOAK_JWKS_URI=http://localhost:18180/realms/digit-sandbox/protocol/openid-connect/certs \
 REDIS_HOST=localhost \
@@ -128,34 +127,30 @@ npm run dev
 
 ## Test Summary
 
-`npm test` is the release suite for the default identity BFF: OIDC/session and
-tenant selection, managed DIGIT accounts, onboarding worker, Keycloak admin
-credentials, and Redis behavior. The retired generic proxy has an explicitly
-separate `npm run test:legacy` suite and is not part of the BFF release gate.
+`npm test` is the release suite for OIDC/session and tenant selection, managed
+DIGIT accounts, the onboarding worker, Keycloak admin credentials, token
+verification, and Redis-backed coordination.
 
 ## Project Structure
 
 ```
 src/
-  config.ts         # Environment config with defaults
-  types.ts          # TypeScript interfaces
-  jwt.ts            # JWKS-based JWT validation (jose)
-  identity-routes.ts         # Browser-facing identity BFF
-  identity-session.ts        # Opaque cookie and Redis-backed KC session
-  digit-identity.ts          # Durable identity/membership/session client
-  identity-control-routes.ts # Workload-authenticated provisioning API
-  identity-admin.ts          # Keycloak Organization/member/role operations
-  cache.ts          # Redis cache with TTL
-  digit-client.ts   # egov-user HTTP client
-  user-resolver.ts  # KC claims -> DIGIT user (core logic)
-  routes.ts         # Path prefix -> upstream mapping
-  proxy.ts          # Content-type-aware request forwarding
-  identity-server.ts        # Default narrow BFF entry point
-  server.ts                 # Legacy generic proxy entry point
+  app/                       # Composition root and the only executable
+  infrastructure/            # Typed configuration and Redis connection
+  integrations/keycloak/     # Keycloak admin-session adapter
+  modules/
+    authentication/          # OIDC, method catalogue, token verification
+    sessions/                # Opaque session lifecycle and browser routes
+    access-context/          # Tenant discovery and context selection
+    organizations/           # Organization, membership and role operations
+    managed-accounts/        # egov-user compatibility accounts and tokens
+    onboarding/              # PGR operation worker and tenant foundation
+    reconciliation/          # Targeted and full identity synchronization
+    control-plane/           # Workload-authenticated internal API
+    operations/              # Liveness, health and readiness
 mocks/
   jwks-server.ts    # RSA key pair + JWKS endpoint for tests
   egov-user.ts      # In-memory egov-user mock
-  digit-backend.ts  # Echo server for upstream verification
 keycloak/
   realm-export.json # digit-sandbox realm config
 ```
@@ -178,6 +173,5 @@ keycloak/
   that user, and returns
   the normal DIGIT login response. Legacy locally managed employees are never
   touched, and the admin token is never used for business calls
-- **Legacy executable isolated during migration**: it is available only through
-  `npm run start:legacy` (and `npm run test:legacy`); the image and normal npm
-  lifecycle default to the narrow identity BFF.
+- **One runtime**: the package builds and deploys only the narrow identity BFF;
+  generic DIGIT proxying and realm-per-tenant synchronization are not present.

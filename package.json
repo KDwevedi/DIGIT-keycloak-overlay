@@ -1,33 +1,23 @@
 {
-  "name": "digit-keycloak-overlay",
+  "name": "digit-identity-bff",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/identity-server.ts",
-    "dev:legacy": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/identity-server.js",
-    "start:legacy": "node dist/server.js",
+    "dev": "tsx watch src/app/server.ts",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
+    "start": "node dist/app/server.js",
     "test": "vitest run",
-    "test:legacy": "vitest run --config vitest.legacy.config.ts",
-    "test:watch": "vitest",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:newman": "newman run tests/postman/kc-e2e.postman_collection.json --env-var keycloakUrl=$LIVE_KC_URL --env-var adminUsername=admin --env-var adminPassword=admin --env-var testRealm=pg --env-var testCity=pg.citya --folder '1. KC Admin & Realm Setup' --folder '2. User Provisioning in KC' --folder '3. OIDC Token Acquisition' --folder '5. Cross-Realm Validation' --folder '6. Cleanup' --reporters cli,junit --reporter-junit-export newman-results.xml"
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@opentelemetry/auto-instrumentations-node": "^0.71.0",
-    "@opentelemetry/exporter-trace-otlp-grpc": "^0.213.0",
-    "@opentelemetry/sdk-node": "^0.213.0",
     "express": "^4.21.0",
     "ioredis": "^5.4.1",
-    "jose": "^5.9.6",
-    "randexp": "^0.5.3"
+    "jose": "^5.9.6"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
-    "newman": "^6.2.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

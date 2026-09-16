@@ -25,7 +25,7 @@ services:
 
   identity-bff:
     build: .
-    command: ["node", "dist/identity-server.js"]
+    command: ["node", "dist/app/server.js"]
     environment:
       PORT: 3000
       KEYCLOAK_ISSUER: http://localhost:18180/realms/digit-sandbox
@@ -53,39 +53,6 @@ services:
       REDIS_PORT: 6379
     ports:
       - "18201:3000"
-    depends_on:
-      - redis
-      - keycloak
-
-  token-exchange-svc:
-    build: .
-    command: ["node", "dist/server.js"]
-    environment:
-      DIGIT_USER_HOST: http://host.docker.internal:8107
-      DIGIT_SYSTEM_USERNAME: INTERNAL_MICROSERVICE_ROLE
-      DIGIT_SYSTEM_PASSWORD: eGov@123
-      DIGIT_SYSTEM_TENANT: pg
-      DIGIT_DEFAULT_TENANT: pg.citya
-      KEYCLOAK_ISSUER: http://keycloak:8180/realms/digit-sandbox
-      KEYCLOAK_JWKS_URI: http://keycloak:8180/realms/digit-sandbox/protocol/openid-connect/certs
-      KEYCLOAK_AUDIENCE: digit-sandbox-ui
-      KEYCLOAK_BFF_CLIENT_ID: digit-identity-bff
-      KEYCLOAK_BFF_CLIENT_SECRET: ${KEYCLOAK_BFF_CLIENT_SECRET:-dev-only-change-me}
-      KEYCLOAK_BFF_AUDIENCE: digit-identity-bff
-      IDENTITY_REDIRECT_URI: http://localhost:18200/identity/v1/callback
-      IDENTITY_POST_LOGIN_REDIRECT: http://localhost:3000/
-      IDENTITY_ALLOWED_ORIGIN: http://localhost:3000
-      IDENTITY_COOKIE_SECURE: "false"
-      KEYCLOAK_ADMIN_URL: http://keycloak:8180
-      KEYCLOAK_ADMIN_USERNAME: admin
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      TENANT_SYNC_ENABLED: "true"
-      DIGIT_MDMS_HOST: ""
-      DIGIT_TENANTS: "pg:pg.citya,pg.cityb"
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    ports:
-      - "18200:3000"
     depends_on:
       - redis
       - keycloak

@@ -38,7 +38,7 @@ services:
   identity-bff:
     image: ${IDENTITY_BFF_IMAGE:?set IDENTITY_BFF_IMAGE}
     container_name: digit-identity-bff
-    command: ["node", "dist/identity-server.js"]
+    command: ["node", "dist/app/server.js"]
     restart: unless-stopped
     env_file:
       - ${IDENTITY_ENV_DIR:?set IDENTITY_ENV_DIR}/identity-bff.env
