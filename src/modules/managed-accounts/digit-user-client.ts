@@ -74,7 +74,7 @@ async function send(path: string, init: RequestInit, operation: string): Promise
     await response.body?.cancel();
     throw new DigitUnavailableError(
       `DIGIT ${operation} returned ${response.status}`,
-      response.status === 400 || response.status === 403 ? 409 : 503,
+      response.status,
     );
   }
   return response;

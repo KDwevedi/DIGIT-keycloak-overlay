@@ -28,7 +28,7 @@ const POLICY = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])(?=.*[@#$%])\S{8,15}$/;
  * search. Stores only password hashes, like egov-user, and records every
  * plaintext it received so tests can prove none leaked into BFF storage.
  */
-export function createFakeDigitUser(options: { tenants: string[] }) {
+export function createFakeDigitUser(options: { tenants: string[]; validateRoles?: boolean }) {
   const app = express();
   app.use(express.json());
   const accounts = new Map<string, Account>();
@@ -56,10 +56,13 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     tenantId: "pg", schemaCode: "common-masters.StateInfo", uniqueIdentifier: "state-info",
     data: { code: "PG", name: "Bootstrap", languages: [{ label: "ENGLISH", value: "en_IN" }] }, isActive: true,
   }]);
-  mdms.set(mdmsKey("pg", "ACCESSCONTROL-ROLES.roles"), [{
-    tenantId: "pg", schemaCode: "ACCESSCONTROL-ROLES.roles", uniqueIdentifier: "gro",
-    data: { code: "GRO", name: "GRO" }, isActive: true,
-  }]);
+  const bootstrapRoles = [
+    "EMPLOYEE", "GRO", "PGR_VIEWER", "ACCOUNT_ADMIN", "MDMS_ADMIN", "LOC_ADMIN", "SUPERUSER",
+  ];
+  mdms.set(mdmsKey("pg", "ACCESSCONTROL-ROLES.roles"), bootstrapRoles.map((code) => ({
+    tenantId: "pg", schemaCode: "ACCESSCONTROL-ROLES.roles", uniqueIdentifier: `role-${code}`,
+    data: { code, name: code, description: `${code} role` }, isActive: true,
+  })));
   const workflows = new Map<string, any[]>([["pg", [{
     tenantId: "pg", businessService: "PGR", business: "pgr", businessServiceSla: 1,
     states: [{ uuid: "start", state: "PENDING", isStartState: true, actions: [] }],
@@ -125,6 +128,14 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     const user = req.body.user;
     if (!POLICY.test(user.password || "") || !user.mobileNumber || !user.roles?.length) {
       return res.status(400).json({ error: "invalid user" });
+    }
+    if (options.validateRoles) {
+      const validRoles = new Set((mdms.get(mdmsKey(user.tenantId, "ACCESSCONTROL-ROLES.roles")) || [])
+        .filter((record) => record.isActive !== false)
+        .map((record) => record.data?.code));
+      if (user.roles.some((role: Role) => role.tenantId !== user.tenantId || !validRoles.has(role.code))) {
+        return res.status(400).json({ error: "INVALID_ROLE" });
+      }
     }
     if ([...accounts.values()].some((account) => account.userName === user.userName && account.tenantId === user.tenantId)) {
       return res.status(400).json({ error: "duplicate" });
@@ -220,6 +231,12 @@ export function createFakeDigitUser(options: { tenants: string[] }) {
     if (schemaCode) return res.json({ mdms: mdms.get(mdmsKey(root, schemaCode)) || [] });
     return res.json({ MdmsRes: { tenant: { tenants: options.tenants
       .filter((tenant) => tenant.split(".")[0] === root).map((code) => ({ code })) } } });
+  });
+
+  app.post("/mdms-v2/v2/_search", (req, res) => {
+    const tenantId = req.body?.MdmsCriteria?.tenantId;
+    const schemaCode = req.body?.MdmsCriteria?.schemaCode;
+    return res.json({ mdms: mdms.get(mdmsKey(tenantId, schemaCode)) || [] });
   });
 
   app.post("/egov-workflow-v2/egov-wf/businessservice/_search", (req, res) => {

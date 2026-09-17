@@ -11,7 +11,7 @@ import { getIssuer } from "../helpers.js";
 import { startIdentityTestApp, stopIdentityTestApp, getIdentityAppPort } from "./identity-test-app.js";
 
 const REALM = "worker-realm";
-const digit = createFakeDigitUser({ tenants: ["pg"] });
+const digit = createFakeDigitUser({ tenants: ["pg"], validateRoles: true });
 
 /** Minimal stand-in for PGR's worker lease API. */
 function fakePgr() {
@@ -82,6 +82,7 @@ beforeAll(async () => {
     cachePrefix: `worker-e2e-${process.pid}`,
     digitUserServiceUrl: `${digitBase}/user`,
     digitMdmsSearchUrl: `${digitBase}/mdms-v2/v1/_search`,
+    digitMdmsV2SearchUrl: `${digitBase}/mdms-v2/v2/_search`,
     digitMdmsCreateUrl: `${digitBase}/mdms-v2/v2/_create`,
     digitMdmsSchemaSearchUrl: `${digitBase}/mdms-v2/schema/v1/_search`,
     digitMdmsSchemaCreateUrl: `${digitBase}/mdms-v2/schema/v1/_create`,
@@ -134,7 +135,9 @@ describe("onboarding worker", () => {
         "riverside:LOC_ADMIN", "riverside:MDMS_ADMIN", "riverside:SUPERUSER",
       ]);
     expect(digit.encKeys.has("riverside")).toBe(true);
-    expect([...digit.schemas.get("riverside")!.keys()]).toEqual(["tenant.tenants"]);
+    expect([...digit.schemas.get("riverside")!.keys()].sort()).toEqual([
+      "ACCESSCONTROL-ROLES.roles", "tenant.tenants",
+    ]);
     const tenantRecord = digit.mdms.get("riverside|tenant.tenants")?.[0]?.data;
     expect(tenantRecord).toMatchObject({
       tenantId: "riverside", code: "riverside", name: "riverside council",
@@ -142,6 +145,10 @@ describe("onboarding worker", () => {
     expect(tenantRecord).not.toHaveProperty("type");
     expect(tenantRecord).not.toHaveProperty("city");
     expect(digit.mdms.has("riverside|tenant.OnboardingConfig")).toBe(false);
+    expect((digit.mdms.get("riverside|ACCESSCONTROL-ROLES.roles") || [])
+      .map((record) => record.data.code).sort()).toEqual([
+      "ACCOUNT_ADMIN", "EMPLOYEE", "GRO", "LOC_ADMIN", "MDMS_ADMIN", "SUPERUSER",
+    ]);
     expect(digit.workflows.has("riverside")).toBe(false);
 
     // Replaying the same operation (e.g. after a lost lease) is idempotent.

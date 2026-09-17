@@ -14,6 +14,14 @@ interface SchemaDefinition {
   definition: Record<string, unknown>;
 }
 
+interface MdmsRecord {
+  uniqueIdentifier?: string;
+  isActive?: boolean;
+  data?: Record<string, unknown>;
+}
+
+const ROLE_SCHEMA_CODE = "ACCESSCONTROL-ROLES.roles";
+
 function requestInfo(token: string) {
   return { apiId: "digit-identity-bff", ver: "1.0", ts: Date.now(), authToken: token };
 }
@@ -37,7 +45,7 @@ async function post(url: string, body: unknown, operation: string): Promise<Reco
   if (!response.ok) {
     await response.body?.cancel();
     throw new DigitUnavailableError(`DIGIT ${operation} returned ${response.status}`,
-      response.status === 400 || response.status === 409 ? 409 : 503);
+      response.status);
   }
   try {
     return await response.json() as Record<string, unknown>;
@@ -46,23 +54,27 @@ async function post(url: string, body: unknown, operation: string): Promise<Reco
   }
 }
 
-async function tenantSchema(token: string, tenantId: string): Promise<SchemaDefinition | null> {
+async function schemaDefinition(
+  token: string,
+  tenantId: string,
+  code: string,
+): Promise<SchemaDefinition | null> {
   const body = await post(config.digitMdmsSchemaSearchUrl, {
     RequestInfo: requestInfo(token),
-    SchemaDefCriteria: { tenantId, codes: ["tenant.tenants"], limit: 10 },
-  }, "tenant schema search");
+    SchemaDefCriteria: { tenantId, codes: [code], limit: 10 },
+  }, `${code} schema search`);
   const schemas = Array.isArray(body.SchemaDefinitions)
     ? body.SchemaDefinitions as SchemaDefinition[]
     : [];
-  return schemas.find((schema) => schema.code === "tenant.tenants") || null;
+  return schemas.find((schema) => schema.code === code) || null;
 }
 
-async function ensureTenantSchema(token: string, target: string): Promise<void> {
-  if (await tenantSchema(token, target)) return;
-  const source = await tenantSchema(token, config.digitFoundationSourceTenant);
+async function ensureSchema(token: string, target: string, code: string): Promise<void> {
+  if (await schemaDefinition(token, target, code)) return;
+  const source = await schemaDefinition(token, config.digitFoundationSourceTenant, code);
   if (!source) {
     throw new DigitUnavailableError(
-      `Foundation source ${config.digitFoundationSourceTenant} has no tenant.tenants schema`, 409,
+      `Foundation source ${config.digitFoundationSourceTenant} has no ${code} schema`, 409,
     );
   }
   try {
@@ -75,11 +87,109 @@ async function ensureTenantSchema(token: string, target: string): Promise<void> 
         definition: source.definition,
         isActive: true,
       },
-    }, "tenant schema create");
+    }, `${code} schema create`);
   } catch (error) {
-    if (!(error instanceof DigitUnavailableError) || error.status !== 409 ||
-        !await tenantSchema(token, target)) throw error;
+    if (!(error instanceof DigitUnavailableError) ||
+        (error.status !== 400 && error.status !== 409) ||
+        !await schemaDefinition(token, target, code)) throw error;
   }
+}
+
+async function ensureTenantSchema(token: string, target: string): Promise<void> {
+  await ensureSchema(token, target, "tenant.tenants");
+}
+
+async function roleRecords(
+  token: string,
+  tenantId: string,
+  roleCodes: string[],
+): Promise<MdmsRecord[]> {
+  if (!roleCodes.length) return [];
+  const body = await post(config.digitMdmsV2SearchUrl, {
+    RequestInfo: requestInfo(token),
+    MdmsCriteria: {
+      tenantId,
+      schemaCode: ROLE_SCHEMA_CODE,
+      limit: Math.max(roleCodes.length, 1000),
+      offset: 0,
+    },
+  }, "role search");
+  return Array.isArray(body.mdms) ? body.mdms as MdmsRecord[] : [];
+}
+
+function roleCode(record: MdmsRecord): string {
+  return typeof record.data?.code === "string" ? record.data.code : "";
+}
+
+function requiredDigitRoleCodes(): string[] {
+  return [...new Set([
+    ...config.digitManagedBaseRoles,
+    ...config.onboardingTenantAdminRoles.filter((code) =>
+      config.digitManagedRoleAllowlist.includes(code)),
+  ])].sort();
+}
+
+/**
+ * egov-user validates every assigned role against the account tenant's own
+ * ACCESSCONTROL-ROLES.roles records. Seed only the roles needed by the first
+ * managed tenant-admin account; the rest of the platform baseline remains a
+ * separate configuration concern.
+ */
+async function ensureTenantAdminRoles(token: string, target: string): Promise<void> {
+  const requiredCodes = requiredDigitRoleCodes();
+  await ensureSchema(token, target, ROLE_SCHEMA_CODE);
+
+  const targetCodes = new Set((await roleRecords(token, target, requiredCodes))
+    .filter((record) => record.isActive !== false)
+    .map(roleCode));
+  const missingCodes = requiredCodes.filter((code) => !targetCodes.has(code));
+  if (!missingCodes.length) return;
+
+  const sourceByCode = new Map((await roleRecords(
+    token, config.digitFoundationSourceTenant, missingCodes,
+  )).filter((record) => record.isActive !== false).map((record) => [roleCode(record), record]));
+  const absentAtSource = missingCodes.filter((code) => !sourceByCode.has(code));
+  if (absentAtSource.length) {
+    throw new DigitUnavailableError(
+      `Foundation source ${config.digitFoundationSourceTenant} has no role definitions for ${absentAtSource.join(", ")}`,
+      409,
+    );
+  }
+
+  for (const code of missingCodes) {
+    const sourceData = sourceByCode.get(code)?.data || {};
+    const data = {
+      code,
+      name: typeof sourceData.name === "string" ? sourceData.name : code,
+      description: typeof sourceData.description === "string" ? sourceData.description : code,
+    };
+    try {
+      await post(`${config.digitMdmsCreateUrl.replace(/\/$/, "")}/${ROLE_SCHEMA_CODE}`, {
+        RequestInfo: requestInfo(token),
+        Mdms: {
+          tenantId: target,
+          schemaCode: ROLE_SCHEMA_CODE,
+          uniqueIdentifier: `${ROLE_SCHEMA_CODE}.${code}`,
+          isActive: true,
+          data,
+        },
+      }, `${code} role create`);
+    } catch (error) {
+      if (!(error instanceof DigitUnavailableError) ||
+          (error.status !== 400 && error.status !== 409)) throw error;
+    }
+  }
+
+  // MDMS persistence is asynchronous. Do not let egov-user race the role
+  // records; a visibility timeout is retryable by the onboarding saga.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const visible = new Set((await roleRecords(token, target, requiredCodes))
+      .filter((record) => record.isActive !== false)
+      .map(roleCode));
+    if (requiredCodes.every((code) => visible.has(code))) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new DigitUnavailableError("DIGIT accepted tenant roles but they are not visible yet");
 }
 
 async function ensureTenantRecord(token: string, signup: TenantFoundationSignup): Promise<void> {
@@ -103,7 +213,8 @@ async function ensureTenantRecord(token: string, signup: TenantFoundationSignup)
       },
     }, "tenant record create");
   } catch (error) {
-    if (!(error instanceof DigitUnavailableError) || error.status !== 409) throw error;
+    if (!(error instanceof DigitUnavailableError) ||
+        (error.status !== 400 && error.status !== 409)) throw error;
   }
   for (let attempt = 0; attempt < 20; attempt += 1) {
     clearTenantCaches();
@@ -130,6 +241,7 @@ export async function ensureTenantFoundation(signup: TenantFoundationSignup): Pr
   await withDigitProvisioner(async (token) => {
     await ensureTenantSchema(token, signup.requestedTenantId);
     await ensureTenantRecord(token, signup);
+    await ensureTenantAdminRoles(token, signup.requestedTenantId);
   });
   await ensureEncryptionKey(signup);
 }

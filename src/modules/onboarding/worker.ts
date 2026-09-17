@@ -18,8 +18,8 @@ import { ensureTenantFoundation } from "./tenant-foundation.js";
  *
  * It leases PENDING operations through PGR's workload API (never its
  * database) and provisions, idempotently:
- *   TENANT_FOUNDATION  independent root tenant schema + self-record and the
- *                      encryption key needed to create its tenant-admin account
+ *   TENANT_FOUNDATION  independent root tenant schema + self-record, minimum
+ *                      tenant-admin DIGIT roles, and encryption key
  *   ORGANIZATION       Keycloak Organization mapped to the tenant
  *   TENANT_ADMIN_MEMBERSHIP tenant admin added to the Organization
  *   TENANT_ADMIN_ROLES tenant-admin group with ONBOARDING_TENANT_ADMIN_ROLES
@@ -118,7 +118,13 @@ function classify(error: unknown, step: string): ProvisioningFailure {
     return new ProvisioningFailure(`${step}_CONFLICT`, error.message, false);
   }
   if (error instanceof DigitUnavailableError) {
-    return new ProvisioningFailure("DIGIT_UNAVAILABLE", error.message, error.status !== 409);
+    if (error.status === 400 || error.status === 409 || error.status === 422) {
+      return new ProvisioningFailure("DIGIT_VALIDATION_FAILED", error.message, false);
+    }
+    if (error.status === 403) {
+      return new ProvisioningFailure("DIGIT_FORBIDDEN", error.message, false);
+    }
+    return new ProvisioningFailure("DIGIT_UNAVAILABLE", error.message, true);
   }
   if (error instanceof IdentityAdminError) {
     return new ProvisioningFailure("KEYCLOAK_UNAVAILABLE", error.message, true);

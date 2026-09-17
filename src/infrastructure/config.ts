@@ -141,6 +141,9 @@ export const config = {
   digitProvisionerPassword: process.env.DIGIT_PROVISIONER_PASSWORD || "",
   digitProvisionerTenantId: process.env.DIGIT_PROVISIONER_TENANT_ID || "",
   digitMdmsCreateUrl: process.env.DIGIT_MDMS_CREATE_URL || "",
+  digitMdmsV2SearchUrl:
+    process.env.DIGIT_MDMS_V2_SEARCH_URL ||
+    `${(process.env.DIGIT_GATEWAY_HOST || "http://gateway:8080").replace(/\/$/, "")}/mdms-v2/v2/_search`,
   digitMdmsSchemaSearchUrl:
     process.env.DIGIT_MDMS_SCHEMA_SEARCH_URL ||
     `${(process.env.DIGIT_GATEWAY_HOST || "http://gateway:8080").replace(/\/$/, "")}/mdms-v2/schema/v1/_search`,

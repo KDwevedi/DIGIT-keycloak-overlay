@@ -314,10 +314,14 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
 1. leases a `PENDING` operation with `POST /v2/onboarding/internal/operations/_claim`
    (PGR uses `FOR UPDATE SKIP LOCKED`; an expired lease is re-claimable);
 2. runs idempotent steps, recording each in `completedSteps`:
-   - `TENANT_FOUNDATION`: creates an independent root with only the copied
-     `tenant.tenants` schema, a root self-record and the encryption key needed by
-     egov-user. It uses a separate `DIGIT_PROVISIONER_*` credential and
-     `DIGIT_MDMS_SCHEMA_*`, `DIGIT_MDMS_CREATE_URL`,
+   - `TENANT_FOUNDATION`: creates an independent root with the copied
+     `tenant.tenants` schema, a root self-record, the tenant-local
+     `ACCESSCONTROL-ROLES.roles` schema and only the roles required by the first
+     tenant-admin account, plus the encryption key needed by egov-user. Role
+     visibility is confirmed before account creation so asynchronous MDMS
+     persistence cannot race egov-user validation. It uses a separate
+     `DIGIT_PROVISIONER_*` credential and `DIGIT_MDMS_SCHEMA_*`,
+     `DIGIT_MDMS_CREATE_URL`, `DIGIT_MDMS_V2_SEARCH_URL`,
      `DIGIT_FOUNDATION_SOURCE_TENANT`, and `DIGIT_ENC_GENERATE_KEY_URL`;
    - `ORGANIZATION`: Keycloak Organization `organizationAlias` mapped to the tenant;
    - `TENANT_ADMIN_MEMBERSHIP`: adds the signup owner to it;
@@ -334,9 +338,10 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
 Transient Keycloak/DIGIT/tenant-visibility errors are retryable. Conflicts
 (alias taken, colliding legacy account, missing tenant-admin mobile) are terminal.
 No application bootstrap is performed. Apart from the technical tenant schema,
-self-record and encryption key, the root is empty: boundaries, departments,
-service definitions, roles/actions, workflow, localization and dashboard
-configuration are deferred to the management/configuration flow. The PGR signup
+self-record, minimum tenant-admin role definitions and encryption key, the root
+is empty: boundaries, departments, service definitions, actions/role-actions,
+workflow, localization and dashboard configuration are deferred to the
+management/configuration flow. The PGR signup
 record remains the onboarding metadata/saga snapshot until that flow materializes it.
 A PGR outage only logs a skipped worker cycle.
 
