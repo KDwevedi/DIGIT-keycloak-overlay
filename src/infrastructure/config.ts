@@ -2,6 +2,7 @@ import type { IdentityAuthMethod } from "../modules/authentication/types.js";
 
 const keycloakBffClientId =
   process.env.KEYCLOAK_BFF_CLIENT_ID || "digit-identity-bff";
+const digitMdmsCreateUrl = process.env.DIGIT_MDMS_CREATE_URL || "";
 
 function csv(value: string): string[] {
   return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
@@ -140,9 +141,10 @@ export const config = {
   digitProvisionerUsername: process.env.DIGIT_PROVISIONER_USERNAME || "",
   digitProvisionerPassword: process.env.DIGIT_PROVISIONER_PASSWORD || "",
   digitProvisionerTenantId: process.env.DIGIT_PROVISIONER_TENANT_ID || "",
-  digitMdmsCreateUrl: process.env.DIGIT_MDMS_CREATE_URL || "",
+  digitMdmsCreateUrl,
   digitMdmsV2SearchUrl:
     process.env.DIGIT_MDMS_V2_SEARCH_URL ||
+    digitMdmsCreateUrl.replace(/\/_create\/?$/, "/_search") ||
     `${(process.env.DIGIT_GATEWAY_HOST || "http://gateway:8080").replace(/\/$/, "")}/mdms-v2/v2/_search`,
   digitMdmsSchemaSearchUrl:
     process.env.DIGIT_MDMS_SCHEMA_SEARCH_URL ||
