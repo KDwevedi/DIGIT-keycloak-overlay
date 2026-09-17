@@ -6,7 +6,6 @@ import {
   ensureOrganizationMembership,
   ensureOrganizationRoleAssignment,
   IdentityAdminError,
-  isOrganizationGroupMember,
   readOrganizationMapping,
   readOrganizationReconciliation,
   sendInvitedIdentityUserActivation,
@@ -45,14 +44,7 @@ async function canManageOrganization(organizationId: string, subject: string): P
   if (!state?.enabled) return false;
   const roles = state.memberRoles.get(subject);
   if (!roles) return false;
-  if (roles.some((role) => config.identityOrganizationAdminRoles.includes(role))) {
-    return true;
-  }
-  return isOrganizationGroupMember({
-    organizationId,
-    groupName: `${config.onboardingFounderGroup}--${subject}`,
-    userId: subject,
-  });
+  return roles.some((role) => config.identityOrganizationAdminRoles.includes(role));
 }
 
 function splitName(name: string): { firstName: string; lastName: string } {

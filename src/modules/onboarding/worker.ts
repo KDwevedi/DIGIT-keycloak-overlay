@@ -19,11 +19,11 @@ import { ensureTenantFoundation } from "./tenant-foundation.js";
  * It leases PENDING operations through PGR's workload API (never its
  * database) and provisions, idempotently:
  *   TENANT_FOUNDATION  independent root tenant schema + self-record and the
- *                      encryption key needed to create its founder account
+ *                      encryption key needed to create its tenant-admin account
  *   ORGANIZATION       Keycloak Organization mapped to the tenant
- *   FOUNDER_MEMBERSHIP founder added to the Organization
- *   FOUNDER_ROLES      founder group with ONBOARDING_FOUNDER_ROLES
- *   DIGIT_ACCOUNT      founder's BFF-managed DIGIT account at the new tenant
+ *   TENANT_ADMIN_MEMBERSHIP tenant admin added to the Organization
+ *   TENANT_ADMIN_ROLES tenant-admin group with ONBOARDING_TENANT_ADMIN_ROLES
+ *   DIGIT_ACCOUNT      tenant admin's BFF-managed DIGIT account at the new tenant
  * then reports success, retryable failure or terminal failure back to PGR.
  * Application schemas, masters, workflows, boundaries and localization are
  * deliberately not provisioned here. The new tenant is identity-ready but
@@ -46,19 +46,19 @@ interface ClaimedOperation {
   };
 }
 
-function founderContact(signup: ClaimedOperation["Signup"]): {
+function tenantAdminContact(signup: ClaimedOperation["Signup"]): {
   mobileNumber: string;
   countryCode?: string;
 } {
-  const founder = signup.tenantMetadata?.founder as {
+  const tenantAdmin = signup.tenantMetadata?.tenantAdmin as {
     mobileNumber?: unknown;
     countryCode?: unknown;
   } | undefined;
-  let mobileNumber = typeof founder?.mobileNumber === "string"
-    ? founder.mobileNumber.replace(/[\s()-]/g, "")
+  let mobileNumber = typeof tenantAdmin?.mobileNumber === "string"
+    ? tenantAdmin.mobileNumber.replace(/[\s()-]/g, "")
     : "";
-  const countryCode = typeof founder?.countryCode === "string"
-    ? founder.countryCode.trim()
+  const countryCode = typeof tenantAdmin?.countryCode === "string"
+    ? tenantAdmin.countryCode.trim()
     : "";
   // egov-user stores the dial code separately and validates only national digits.
   if (countryCode && mobileNumber.startsWith(countryCode)) {
@@ -112,7 +112,7 @@ async function createTenantFoundation(signup: ClaimedOperation["Signup"]): Promi
 function classify(error: unknown, step: string): ProvisioningFailure {
   if (error instanceof ProvisioningFailure) return error;
   if (error instanceof ManagedAccountError) {
-    return new ProvisioningFailure("FOUNDER_ACCOUNT_REJECTED", error.message, false);
+    return new ProvisioningFailure("TENANT_ADMIN_ACCOUNT_REJECTED", error.message, false);
   }
   if (error instanceof IdentityAdminError && (error.status === 400 || error.status === 409)) {
     return new ProvisioningFailure(`${step}_CONFLICT`, error.message, false);
@@ -148,17 +148,17 @@ export async function processOnboardingOperation(claimed: ClaimedOperation): Pro
       })).id;
       clearTenantCaches();
     });
-    await run("FOUNDER_MEMBERSHIP", () => ensureOrganizationMembership({
+    await run("TENANT_ADMIN_MEMBERSHIP", () => ensureOrganizationMembership({
       organizationId, userId: signup.ownerSubject,
     }));
-    await run("FOUNDER_ROLES", async () => {
+    await run("TENANT_ADMIN_ROLES", async () => {
       await ensureOrganizationRoleAssignment({
-        organizationId, userId: signup.ownerSubject, groupName: config.onboardingFounderGroup,
-        clientId: config.digitRoleClientId, roles: config.onboardingFounderRoles,
+        organizationId, userId: signup.ownerSubject, groupName: config.onboardingTenantAdminGroup,
+        clientId: config.digitRoleClientId, roles: config.onboardingTenantAdminRoles,
       });
     });
     await run("DIGIT_ACCOUNT", async () => {
-      const contact = founderContact(signup);
+      const contact = tenantAdminContact(signup);
       await syncSubject(signup.ownerSubject, contact.mobileNumber, contact.countryCode);
     });
     await settle("_complete", {

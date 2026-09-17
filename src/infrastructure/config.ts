@@ -159,8 +159,11 @@ export const config = {
   pgrOnboardingWorkerToken: process.env.PGR_ONBOARDING_WORKER_TOKEN || "",
   onboardingWorkerIntervalSeconds: parseInt(process.env.ONBOARDING_WORKER_INTERVAL_SECONDS || "15"),
   onboardingWorkerLeaseSeconds: parseInt(process.env.ONBOARDING_WORKER_LEASE_SECONDS || "120"),
-  onboardingFounderGroup: process.env.ONBOARDING_FOUNDER_GROUP || "founders",
-  onboardingFounderRoles: csv(process.env.ONBOARDING_FOUNDER_ROLES || "GRO"),
+  onboardingTenantAdminGroup:
+    process.env.ONBOARDING_TENANT_ADMIN_GROUP || "tenant-admins",
+  onboardingTenantAdminRoles: csv(
+    process.env.ONBOARDING_TENANT_ADMIN_ROLES || "TENANT_ADMIN,GRO",
+  ),
   identityOrganizationAdminRoles: csv(
     process.env.IDENTITY_ORGANIZATION_ADMIN_ROLES || "TENANT_ADMIN",
   ),

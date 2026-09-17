@@ -339,7 +339,7 @@ export async function ensureOrganization(input: {
 }
 
 /**
- * Profile facts used when DIGIT must create an employee for a new founder.
+ * Profile facts used when DIGIT must create an employee for a new tenant admin.
  * Only a verified email is passed on; the subject itself is the link key.
  */
 export async function readIdentityUserProfile(userId: string): Promise<IdentityUserProfile> {
@@ -445,24 +445,6 @@ export async function isOrganizationMember(organizationId: string, userId: strin
     if (error instanceof IdentityAdminError && error.status === 404) return false;
     throw error;
   }
-}
-
-/** Live membership check for one Organization group (used for founder authority). */
-export async function isOrganizationGroupMember(input: {
-  organizationId: string;
-  groupName: string;
-  userId: string;
-}): Promise<boolean> {
-  const base = `/organizations/${encodeURIComponent(input.organizationId)}/groups`;
-  const query = new URLSearchParams({ search: input.groupName, exact: "true", max: "20" });
-  const response = await request(`${base}?${query}`);
-  const groups = await response.json() as GroupRepresentation[];
-  const group = groups.find((candidate) => candidate.name === input.groupName);
-  if (!group) return false;
-  const members = await paged<UserRepresentation>(
-    `${base}/${encodeURIComponent(group.id)}/members`,
-  );
-  return members.some((member) => member.id === input.userId);
 }
 
 export async function ensureOrganizationMembership(input: {

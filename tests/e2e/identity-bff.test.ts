@@ -125,30 +125,30 @@ describe("identity BFF", () => {
     expect(await ensureOrganization("ke.nakuru", "nakuru")).toBe(nakuru);
 
     const created = await kcAdmin("/users", {
-      username: "founder@example.org", email: "founder@example.org",
-      firstName: "New", lastName: "Founder", emailVerified: true,
+      username: "member@example.org", email: "member@example.org",
+      firstName: "New", lastName: "Member", emailVerified: true,
     });
-    const founderId = created.headers.get("location")!.split("/").pop()!;
+    const memberId = created.headers.get("location")!.split("/").pop()!;
 
     expect((await post("/memberships/_ensure", {
-      organizationId: nakuru, userId: founderId, digitUserUuid: "legacy-employee",
+      organizationId: nakuru, userId: memberId, digitUserUuid: "legacy-employee",
     })).status).toBe(400);
-    expect((await post("/memberships/_ensure", { organizationId: nakuru, userId: founderId })).status)
+    expect((await post("/memberships/_ensure", { organizationId: nakuru, userId: memberId })).status)
       .toBe(409);
 
     const first = await post("/memberships/_ensure", {
-      organizationId: nakuru, userId: founderId, mobileNumber: "0712345678",
+      organizationId: nakuru, userId: memberId, mobileNumber: "0712345678",
     });
     expect(first.status).toBe(200);
     const firstBody = await first.json();
     expect(firstBody).toMatchObject({ created: true });
-    const repeat = await post("/memberships/_ensure", { organizationId: nakuru, userId: founderId });
+    const repeat = await post("/memberships/_ensure", { organizationId: nakuru, userId: memberId });
     expect(await repeat.json()).toEqual({
       tenantId: "ke.nakuru", digitUserUuid: firstBody.digitUserUuid, created: false,
     });
 
     const roles = await post("/role-assignments/_ensure", {
-      organizationId: nakuru, userId: founderId, groupName: "officers", clientId: "digit-ui", roles: ["GRO"],
+      organizationId: nakuru, userId: memberId, groupName: "officers", clientId: "digit-ui", roles: ["GRO"],
     });
     expect(roles.status).toBe(200);
     expect(await roles.json()).toMatchObject({
@@ -156,7 +156,7 @@ describe("identity BFF", () => {
     });
 
     const nyeri = await ensureOrganization("ke.nyeri", "nyeri");
-    const second = await post("/memberships/_ensure", { organizationId: nyeri, userId: founderId });
+    const second = await post("/memberships/_ensure", { organizationId: nyeri, userId: memberId });
     const secondBody = await second.json();
     // DIGIT authorizes a token only at its account's home tenant: one account per tenant.
     expect(secondBody).toMatchObject({ tenantId: "ke.nyeri", created: true });

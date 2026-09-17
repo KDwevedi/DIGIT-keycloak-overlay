@@ -148,8 +148,8 @@ documented profile fields.
 
 The caller first selects their Organization with `contexts/_select`. A live
 Keycloak Organization membership plus a role in
-`IDENTITY_ORGANIZATION_ADMIN_ROLES` is required; the onboarding founder group is
-also authorized. The request cannot name another Organization.
+`IDENTITY_ORGANIZATION_ADMIN_ROLES` is required. Onboarding assigns the initial
+user `TENANT_ADMIN`; the request cannot name another Organization.
 
 ```http
 POST /identity/v1/organization-members/_invite
@@ -258,7 +258,7 @@ calls.
   login calls.
 - **Mobile required:** egov-user requires a mobile number to create an employee.
   Login-time creation uses a `phone_number` claim. The worker uses
-  `tenantMetadata.founder.{mobileNumber,countryCode}` and separates an E.164
+  `tenantMetadata.tenantAdmin.{mobileNumber,countryCode}` and separates an E.164
   dial prefix before calling egov-user. The state tenant must contain a matching
   `common-masters.MobileNumberValidation` rule. `memberships/_ensure` accepts
   `mobileNumber` plus `countryCode` and otherwise reuses them from an existing
@@ -291,7 +291,7 @@ Provisioning routes require `IDENTITY_CONTROL_PLANE_TOKEN` and are idempotent:
 - `POST /internal/identity/v1/reconciliation/_run`
 - `POST /internal/identity/v1/identifiers/_check` — live Organization/tenant collision check; uses the narrower introspection credential.
 
-PGR authenticates an onboarding founder through the narrower
+PGR authenticates the onboarding tenant admin through the narrower
 `POST /internal/identity/v1/sessions/_introspect` with its own
 `IDENTITY_SESSION_INTROSPECTION_TOKEN`, which cannot provision anything.
 
@@ -320,10 +320,11 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
      `DIGIT_MDMS_SCHEMA_*`, `DIGIT_MDMS_CREATE_URL`,
      `DIGIT_FOUNDATION_SOURCE_TENANT`, and `DIGIT_ENC_GENERATE_KEY_URL`;
    - `ORGANIZATION`: Keycloak Organization `organizationAlias` mapped to the tenant;
-   - `FOUNDER_MEMBERSHIP`: adds the signup owner to it;
-   - `FOUNDER_ROLES`: `ONBOARDING_FOUNDER_GROUP` with `ONBOARDING_FOUNDER_ROLES`;
-   - `DIGIT_ACCOUNT`: the founder's managed DIGIT account at the new tenant,
-     created with `tenantMetadata.founder.mobileNumber` (or the founder's
+   - `TENANT_ADMIN_MEMBERSHIP`: adds the signup owner to it;
+   - `TENANT_ADMIN_ROLES`: `ONBOARDING_TENANT_ADMIN_GROUP` with
+     `ONBOARDING_TENANT_ADMIN_ROLES`;
+   - `DIGIT_ACCOUNT`: the tenant admin's managed DIGIT account at the new tenant,
+     created with `tenantMetadata.tenantAdmin.mobileNumber` (or the tenant admin's
      existing managed mobile), and its projected roles;
 3. reports `_complete` (operation `SUCCEEDED`, signup `ACTIVE`) or `_fail` with
    `retryable` (`RETRYABLE_FAILED`; the owner may `_retry`) or terminal
@@ -331,7 +332,7 @@ Enabled only with `ONBOARDING_WORKER_ENABLED=true` plus `PGR_ONBOARDING_WORKER_U
    Keycloak/DIGIT objects may already exist).
 
 Transient Keycloak/DIGIT/tenant-visibility errors are retryable. Conflicts
-(alias taken, colliding legacy account, missing founder mobile) are terminal.
+(alias taken, colliding legacy account, missing tenant-admin mobile) are terminal.
 No application bootstrap is performed. Apart from the technical tenant schema,
 self-record and encryption key, the root is empty: boundaries, departments,
 service definitions, roles/actions, workflow, localization and dashboard

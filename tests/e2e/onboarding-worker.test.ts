@@ -48,7 +48,7 @@ async function kcUser(username: string): Promise<string> {
   const response = await fetch(`${config.keycloakAdminUrl}/admin/realms/${REALM}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, email: `${username}@example.org`, firstName: "New", lastName: "Founder", emailVerified: true }),
+    body: JSON.stringify({ username, email: `${username}@example.org`, firstName: "Tenant", lastName: "Admin", emailVerified: true }),
   });
   return response.headers.get("location")!.split("/").pop()!;
 }
@@ -61,7 +61,7 @@ function operation(id: string, subject: string, slug: string, mobileNumber?: str
       id: `signup-${id}`, ownerIssuer: getIssuer(), ownerSubject: subject,
       accountName: `${slug} council`, accountCode: slug.toUpperCase(), organizationAlias: slug,
       requestedTenantId: slug, countryCode: "KE",
-      tenantMetadata: mobileNumber ? { founder: { mobileNumber, countryCode } } : {},
+      tenantMetadata: mobileNumber ? { tenantAdmin: { mobileNumber, countryCode } } : {},
     },
   };
 }
@@ -94,8 +94,8 @@ beforeAll(async () => {
     digitRoleClientId: "digit-ui",
     pgrOnboardingWorkerUrl: pgrBase,
     pgrOnboardingWorkerToken: "worker-secret",
-    onboardingFounderGroup: "founders",
-    onboardingFounderRoles: ["GRO"],
+    onboardingTenantAdminGroup: "tenant-admins",
+    onboardingTenantAdminRoles: ["TENANT_ADMIN", "GRO"],
   });
   resetDigitAdminToken();
   clearTenantCaches();
@@ -109,17 +109,17 @@ afterAll(async () => {
 });
 
 describe("onboarding worker", () => {
-  it("provisions tenant foundation, Organization, founder membership, roles and DIGIT account", async () => {
-    const founder = await kcUser("founder-one");
-    pgr.queue.push(operation("op-1", founder, "riverside", "+254712345678", "+254"));
+  it("provisions tenant foundation, Organization, tenant-admin membership, roles and DIGIT account", async () => {
+    const tenantAdmin = await kcUser("tenant-admin-one");
+    pgr.queue.push(operation("op-1", tenantAdmin, "riverside", "+254712345678", "+254"));
 
     expect(await runOnboardingWorkerOnce()).toBe(1);
 
     expect(pgr.settled["op-1"]).toMatchObject({
       outcome: "_complete", leaseToken: "lease-op-1",
-      completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "FOUNDER_MEMBERSHIP", "FOUNDER_ROLES", "DIGIT_ACCOUNT"],
+      completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "TENANT_ADMIN_MEMBERSHIP", "TENANT_ADMIN_ROLES", "DIGIT_ACCOUNT"],
     });
-    const account = [...digit.accounts.values()].find((candidate) => candidate.name === "New Founder")!;
+    const account = [...digit.accounts.values()].find((candidate) => candidate.name === "Tenant Admin")!;
     expect(account.identificationMark).toMatch(/^keycloak-bff:v1:[0-9a-f]{64}:riverside$/);
     expect(account.tenantId).toBe("riverside");
     expect(account.mobileNumber).toBe("712345678");
@@ -138,28 +138,28 @@ describe("onboarding worker", () => {
     expect(digit.workflows.has("riverside")).toBe(false);
 
     // Replaying the same operation (e.g. after a lost lease) is idempotent.
-    pgr.queue.push(operation("op-1b", founder, "riverside", "9812345678"));
+    pgr.queue.push(operation("op-1b", tenantAdmin, "riverside", "9812345678"));
     await runOnboardingWorkerOnce();
     expect(pgr.settled["op-1b"].outcome).toBe("_complete");
-    expect([...digit.accounts.values()].filter((candidate) => candidate.name === "New Founder")).toHaveLength(1);
+    expect([...digit.accounts.values()].filter((candidate) => candidate.name === "Tenant Admin")).toHaveLength(1);
   });
 
-  it("reports a terminal failure when the founder account cannot be created", async () => {
-    const founder = await kcUser("founder-two");
-    pgr.queue.push(operation("op-2", founder, "hillview"));
+  it("reports a terminal failure when the tenant-admin account cannot be created", async () => {
+    const tenantAdmin = await kcUser("tenant-admin-two");
+    pgr.queue.push(operation("op-2", tenantAdmin, "hillview"));
 
     await runOnboardingWorkerOnce();
 
     expect(pgr.settled["op-2"]).toMatchObject({
-      outcome: "_fail", retryable: false, errorCode: "FOUNDER_ACCOUNT_REJECTED", currentStep: "DIGIT_ACCOUNT",
-      completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "FOUNDER_MEMBERSHIP", "FOUNDER_ROLES"],
+      outcome: "_fail", retryable: false, errorCode: "TENANT_ADMIN_ACCOUNT_REJECTED", currentStep: "DIGIT_ACCOUNT",
+      completedSteps: ["TENANT_FOUNDATION", "ORGANIZATION", "TENANT_ADMIN_MEMBERSHIP", "TENANT_ADMIN_ROLES"],
     });
   });
 
   it("reports a retryable failure when the tenant foundation cannot be provisioned", async () => {
-    const founder = await kcUser("founder-three");
+    const tenantAdmin = await kcUser("tenant-admin-three");
     (config as any).digitProvisionerUsername = "";
-    pgr.queue.push(operation("op-3", founder, "lakeside", "9812345679"));
+    pgr.queue.push(operation("op-3", tenantAdmin, "lakeside", "9812345679"));
 
     await runOnboardingWorkerOnce();
 

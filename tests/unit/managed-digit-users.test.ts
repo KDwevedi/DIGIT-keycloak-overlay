@@ -60,7 +60,7 @@ beforeEach(async () => {
 
 const subject = () => `subject-${run}`;
 const profile = {
-  name: "New Founder", emailId: "founder@example.org",
+  name: "Tenant Admin", emailId: "tenant-admin@example.org",
   mobileNumber: "712345678", countryCode: "+254",
 };
 
