@@ -10,6 +10,8 @@ interface MockUser {
   enabled: boolean;
   emailVerified: boolean;
   attributes?: Record<string, string[]>;
+  requiredActions?: string[];
+  activationEmails?: number;
 }
 
 interface RealmState {
@@ -221,7 +223,10 @@ export function createKcAdminMock() {
   // POST /admin/realms/:realm/users — create user
   app.post("/admin/realms/:realm/users", (req, res) => {
     const realm = getOrCreateRealm(req.params.realm);
-    const { id, username, email, firstName, lastName, enabled, emailVerified, attributes } = req.body;
+    const {
+      id, username, email, firstName, lastName, enabled, emailVerified, attributes,
+      requiredActions,
+    } = req.body;
     // Check for duplicate by email or username
     const exists = realm.users.some(
       (u) => u.email === email || u.username === username,
@@ -238,6 +243,7 @@ export function createKcAdminMock() {
       enabled: enabled ?? true,
       emailVerified: emailVerified ?? false,
       attributes,
+      requiredActions,
     };
     realm.users.push(user);
     res.status(201).set("Location", `/admin/realms/${req.params.realm}/users/${user.id}`).end();
@@ -254,6 +260,18 @@ export function createKcAdminMock() {
     const index = realm.users.findIndex((candidate) => candidate.id === req.params.userId);
     if (index < 0) return res.status(404).json({ error: "User not found" });
     realm.users[index] = { ...realm.users[index], ...req.body, id: req.params.userId };
+    return res.status(204).end();
+  });
+
+  app.put("/admin/realms/:realm/users/:userId/execute-actions-email", (req, res) => {
+    const realm = getOrCreateRealm(req.params.realm);
+    const user = realm.users.find((candidate) => candidate.id === req.params.userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!Array.isArray(req.body) || !req.body.every((action) => typeof action === "string")) {
+      return res.status(400).json({ error: "actions required" });
+    }
+    user.requiredActions = [...new Set([...(user.requiredActions || []), ...req.body])];
+    user.activationEmails = (user.activationEmails || 0) + 1;
     return res.status(204).end();
   });
 

@@ -28,9 +28,11 @@ interface UserRepresentation {
   lastName?: string;
   enabled?: boolean;
   attributes?: Record<string, string[]>;
+  requiredActions?: string[];
 }
 
 const MANAGED_TENANTS_ATTRIBUTE = "digit.managedTenants";
+const BFF_INVITED_USER_ATTRIBUTE = "digit.identityBffInvited";
 
 export async function managedTenantsFromIdentity(userId: string): Promise<string[]> {
   const response = await request(`/users/${encodeURIComponent(userId)}`);
@@ -68,6 +70,14 @@ export async function recordManagedTenant(userId: string, tenantId: string): Pro
 export interface IdentityUserProfile {
   name: string;
   emailId?: string;
+}
+
+export interface InvitedIdentityUser {
+  id: string;
+  email: string;
+  name: string;
+  created: boolean;
+  activationRequired: boolean;
 }
 
 export interface OrganizationReconciliationState {
@@ -349,6 +359,81 @@ export async function readIdentityUserProfile(userId: string): Promise<IdentityU
   };
 }
 
+function invitedUser(user: UserRepresentation, email: string, created: boolean): InvitedIdentityUser {
+  if (!user.id || user.enabled === false || user.email?.toLowerCase() !== email) {
+    throw new IdentityAdminError("The Keycloak user is not available for invitation", 409);
+  }
+  const managedInvitation = user.attributes?.[BFF_INVITED_USER_ATTRIBUTE]?.includes("true") === true;
+  if (user.emailVerified !== true && !managedInvitation) {
+    throw new IdentityAdminError(
+      "An unverified Keycloak account already uses this email address",
+      409,
+    );
+  }
+  const name = [user.firstName, user.lastName]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" ") || user.username?.trim() || email;
+  return {
+    id: user.id,
+    email,
+    name,
+    created,
+    activationRequired: user.emailVerified !== true,
+  };
+}
+
+async function findIdentityUserByEmail(email: string): Promise<UserRepresentation | null> {
+  const query = new URLSearchParams({ email, exact: "true", max: "2" });
+  const response = await request(`/users?${query}`);
+  const matches = (await response.json() as UserRepresentation[])
+    .filter((user) => user.email?.toLowerCase() === email);
+  if (matches.length > 1) {
+    throw new IdentityAdminError("Multiple Keycloak users use this email address", 409);
+  }
+  return matches[0] || null;
+}
+
+/** Creates the passwordless Keycloak identity used by an employee invitation. */
+export async function ensureInvitedIdentityUser(input: {
+  email: string;
+  firstName: string;
+  lastName: string;
+}): Promise<InvitedIdentityUser> {
+  const email = input.email.trim().toLowerCase();
+  const existing = await findIdentityUserByEmail(email);
+  if (existing) return invitedUser(existing, email, false);
+
+  const response = await request("/users", {
+    method: "POST",
+    body: JSON.stringify({
+      username: email,
+      email,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      enabled: true,
+      emailVerified: false,
+      requiredActions: ["VERIFY_EMAIL", "UPDATE_PASSWORD"],
+      attributes: { [BFF_INVITED_USER_ATTRIBUTE]: ["true"] },
+    }),
+  }, [201, 409]);
+  const id = response.headers.get("location")?.split("/").filter(Boolean).pop();
+  const created = response.status === 201;
+  const user = id
+    ? await request(`/users/${encodeURIComponent(id)}`).then((value) => value.json() as Promise<UserRepresentation>)
+    : await findIdentityUserByEmail(email);
+  if (!user) throw new IdentityAdminError("Keycloak did not identify the user it created");
+  return invitedUser(user, email, created);
+}
+
+/** Sends the one-use Keycloak link that verifies email and establishes a password. */
+export async function sendInvitedIdentityUserActivation(userId: string): Promise<void> {
+  await request(`/users/${encodeURIComponent(userId)}/execute-actions-email`, {
+    method: "PUT",
+    body: JSON.stringify(["VERIFY_EMAIL", "UPDATE_PASSWORD"]),
+  });
+}
+
 /** Live Keycloak check that the user is still a member of the Organization. */
 export async function isOrganizationMember(organizationId: string, userId: string): Promise<boolean> {
   try {
@@ -360,6 +445,24 @@ export async function isOrganizationMember(organizationId: string, userId: strin
     if (error instanceof IdentityAdminError && error.status === 404) return false;
     throw error;
   }
+}
+
+/** Live membership check for one Organization group (used for founder authority). */
+export async function isOrganizationGroupMember(input: {
+  organizationId: string;
+  groupName: string;
+  userId: string;
+}): Promise<boolean> {
+  const base = `/organizations/${encodeURIComponent(input.organizationId)}/groups`;
+  const query = new URLSearchParams({ search: input.groupName, exact: "true", max: "20" });
+  const response = await request(`${base}?${query}`);
+  const groups = await response.json() as GroupRepresentation[];
+  const group = groups.find((candidate) => candidate.name === input.groupName);
+  if (!group) return false;
+  const members = await paged<UserRepresentation>(
+    `${base}/${encodeURIComponent(group.id)}/members`,
+  );
+  return members.some((member) => member.id === input.userId);
 }
 
 export async function ensureOrganizationMembership(input: {

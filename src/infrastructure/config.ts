@@ -161,6 +161,11 @@ export const config = {
   onboardingWorkerLeaseSeconds: parseInt(process.env.ONBOARDING_WORKER_LEASE_SECONDS || "120"),
   onboardingFounderGroup: process.env.ONBOARDING_FOUNDER_GROUP || "founders",
   onboardingFounderRoles: csv(process.env.ONBOARDING_FOUNDER_ROLES || "GRO"),
+  identityOrganizationAdminRoles: csv(
+    process.env.IDENTITY_ORGANIZATION_ADMIN_ROLES || "TENANT_ADMIN",
+  ),
+  identityOrganizationMemberGroup:
+    process.env.IDENTITY_ORGANIZATION_MEMBER_GROUP || "employees",
   digitManagedBaseRoles: csv(process.env.DIGIT_MANAGED_BASE_ROLES || "EMPLOYEE"),
   digitManagedRoleAllowlist: csv(
     process.env.DIGIT_MANAGED_ROLE_ALLOWLIST ||

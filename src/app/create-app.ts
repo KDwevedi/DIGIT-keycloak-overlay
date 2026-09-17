@@ -4,6 +4,7 @@ import { registerControlPlaneRoutes } from "../modules/control-plane/routes.js";
 import { registerAccessContextRoutes } from "../modules/access-context/routes.js";
 import { registerAuthenticationRoutes } from "../modules/authentication/routes.js";
 import { registerOperationalRoutes } from "../modules/operations/routes.js";
+import { registerOrganizationRoutes } from "../modules/organizations/routes.js";
 import { registerSessionRoutes } from "../modules/sessions/routes.js";
 
 /**
@@ -36,6 +37,7 @@ export function createIdentityApp(): express.Application {
   registerAuthenticationRoutes(app);
   registerSessionRoutes(app);
   registerAccessContextRoutes(app);
+  registerOrganizationRoutes(app);
   registerControlPlaneRoutes(app);
   return app;
 }

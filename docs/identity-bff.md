@@ -32,6 +32,7 @@ password.
 | `GET` | `/identity/v1/session` | Authentication state, opaque-session expiry, and selected tenant; never tokens |
 | `GET` | `/identity/v1/tenants` | Tenants in both Keycloak membership and DIGIT grants |
 | `POST` | `/identity/v1/contexts/_select` | Records the tenant and returns the normal DIGIT login response |
+| `POST` | `/identity/v1/organization-members/_invite` | Grants an employee access to the selected Organization and provisions their tenant-local DIGIT account |
 | `POST` | `/identity/v1/logout` | Revokes the DIGIT token and Keycloak session, clears the cookie |
 
 ### Existing-user sign-in sequence
@@ -142,6 +143,57 @@ once before the callback. Existing users go directly from the link to callback.
 The token belongs to the signed-in person's own DIGIT account, so Kong's normal
 `/user/_details` resolution and RBAC apply. `UserRequest` is narrowed to the
 documented profile fields.
+
+### Invite an employee
+
+The caller first selects their Organization with `contexts/_select`. A live
+Keycloak Organization membership plus a role in
+`IDENTITY_ORGANIZATION_ADMIN_ROLES` is required; the onboarding founder group is
+also authorized. The request cannot name another Organization.
+
+```http
+POST /identity/v1/organization-members/_invite
+Content-Type: application/json
+
+{
+  "email": "employee@example.com",
+  "name": "Employee Name",
+  "mobileNumber": "712345678",
+  "countryCode": "254",
+  "roles": ["GRO"]
+}
+```
+
+`roles` is optional and is restricted to `DIGIT_MANAGED_ROLE_ALLOWLIST`; the
+configured base role is added automatically. The BFF creates or reuses the
+Keycloak user, adds Organization membership and a per-user Organization group,
+sets its client roles, and creates or updates the BFF-managed DIGIT account at
+the selected tenant. A newly created Keycloak user receives an activation email
+to verify the address and set a password. An existing verified user receives
+access immediately and can use any already-configured Keycloak sign-in method.
+
+```json
+{
+  "member": {
+    "identityUserId": "...",
+    "organizationId": "...",
+    "tenantId": "ke.bomet",
+    "email": "employee@example.com",
+    "name": "Employee Name",
+    "roles": ["EMPLOYEE", "GRO"],
+    "digitUserUuid": "..."
+  },
+  "identityUserCreated": true,
+  "digitAccountCreated": true,
+  "activationEmailSent": true
+}
+```
+
+Provisioning is retry-safe. A failure may leave the earlier Keycloak steps in
+place, and repeating the same request resumes them without another identity or
+DIGIT account. `401` means no identity session, `403` means the caller has no
+live admin authority, `409` means no Organization is selected or an identity
+conflicts, and `503` means DIGIT is temporarily unavailable.
 
 ## Organization → tenant mapping
 

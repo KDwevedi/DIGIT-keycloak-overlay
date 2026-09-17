@@ -65,6 +65,7 @@ GET  /identity/v1/callback
 GET  /identity/v1/session
 GET  /identity/v1/tenants
 POST /identity/v1/contexts/_select
+POST /identity/v1/organization-members/_invite
 POST /identity/v1/logout
 ```
 

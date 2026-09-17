@@ -5,6 +5,10 @@ import { createFakeDigitUser } from "../../mocks/fake-digit-user.js";
 import { getRedis } from "../../src/infrastructure/redis.js";
 import { managedAccountsKey } from "../../src/modules/managed-accounts/managed-account-service.js";
 import {
+  createIdentitySession,
+  saveSelectedIdentityContext,
+} from "../../src/modules/sessions/session-store.js";
+import {
   getIdentityAppPort as getAppPort,
   startIdentityTestApp as startTestApp,
   stopIdentityTestApp as stopTestApp,
@@ -57,6 +61,8 @@ beforeAll(async () => {
     digitManagedBaseRoles: ["EMPLOYEE"],
     digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
     digitRoleClientId: "digit-ui",
+    identityOrganizationAdminRoles: ["TENANT_ADMIN"],
+    identityOrganizationMemberGroup: "employees",
   });
   (config as any).identityControlPlaneToken = "test-control-plane";
   (config as any).identitySessionIntrospectionToken = "test-session-introspection";
@@ -531,5 +537,120 @@ describe("identity BFF", () => {
       { headers: { Cookie: cookie } },
     );
     expect(afterLogout.status).toBe(401);
+  });
+
+  it("lets a live Organization admin invite and provision an employee", async () => {
+    const { sessionId } = await createIdentitySession({
+      accessToken: "server-side-test-token",
+      accessExpiresIn: 3600,
+    }, {
+      sub: "identity-user-1",
+      email: "person@example.com",
+      name: "Demo Person",
+    }, "digit-identity-bff");
+    await saveSelectedIdentityContext(sessionId, {
+      organizationId: "org-bomet-id",
+      organizationAlias: "bomet",
+      tenantId: "ke.bomet",
+      name: "Bomet County",
+    });
+    const cookie = `${config.identityCookieName}=${sessionId}`;
+    const endpoint = `http://localhost:${getAppPort()}/identity/v1/organization-members/_invite`;
+    const body = {
+      email: "new.employee@example.com",
+      name: "New Employee",
+      mobileNumber: "0723456789",
+      countryCode: "254",
+      roles: ["GRO"],
+    };
+    const invite = (overrides: Record<string, unknown> = {}, origin = "http://localhost:3000") =>
+      fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ...body, ...overrides }),
+      });
+
+    expect((await invite()).status).toBe(403);
+    expect((await invite({}, "https://attacker.example")).status).toBe(403);
+
+    const controlResponse = await fetch(
+      `http://localhost:${getAppPort()}/internal/identity/v1/role-assignments/_ensure`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-control-plane",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          organizationId: "org-bomet-id",
+          userId: "identity-user-1",
+          groupName: "organization-admins",
+          clientId: "digit-ui",
+          roles: ["TENANT_ADMIN"],
+        }),
+      },
+    );
+    expect(controlResponse.status).toBe(200);
+    expect((await invite({ roles: ["NOT_ALLOWED"] })).status).toBe(400);
+
+    const created = await invite();
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody).toMatchObject({
+      member: {
+        organizationId: "org-bomet-id",
+        tenantId: "ke.bomet",
+        email: "new.employee@example.com",
+        name: "New Employee",
+        roles: ["EMPLOYEE", "GRO"],
+      },
+      identityUserCreated: true,
+      digitAccountCreated: true,
+      activationEmailSent: true,
+    });
+    expect(createdBody.member.identityUserId).toBeTruthy();
+    expect(createdBody.member.digitUserUuid).toBeTruthy();
+
+    const users = await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}` +
+        "/users?email=new.employee%40example.com&exact=true",
+    );
+    const [identityUser] = await users.json() as Array<{
+      id: string;
+      requiredActions: string[];
+      activationEmails: number;
+    }>;
+    expect(identityUser.id).toBe(createdBody.member.identityUserId);
+    expect(identityUser.requiredActions.sort()).toEqual(["UPDATE_PASSWORD", "VERIFY_EMAIL"]);
+    expect(identityUser.activationEmails).toBe(1);
+    expect((await fetch(
+      `${config.keycloakAdminUrl}/admin/realms/${config.keycloakOrganizationRealm}` +
+        `/organizations/org-bomet-id/members/${identityUser.id}`,
+    )).status).toBe(200);
+
+    const account = digit.accounts.get(createdBody.member.digitUserUuid)!;
+    expect(account).toMatchObject({
+      name: "New Employee",
+      mobileNumber: "0723456789",
+      countryCode: "254",
+      tenantId: "ke.bomet",
+      active: true,
+    });
+
+    const repeated = await invite();
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toMatchObject({
+      member: {
+        identityUserId: identityUser.id,
+        digitUserUuid: account.uuid,
+      },
+      identityUserCreated: false,
+      digitAccountCreated: false,
+      activationEmailSent: true,
+    });
   });
 });
