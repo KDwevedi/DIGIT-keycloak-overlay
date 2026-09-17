@@ -90,12 +90,16 @@ beforeAll(async () => {
     digitProvisionerUsername: "BFF-PROVISIONER", digitProvisionerPassword: "Adm1n@Secret", digitProvisionerTenantId: "pg",
     digitEncGenerateKeyUrl: `${digitBase}/egov-enc-service/crypto/v1/_generatekey`,
     digitManagedBaseRoles: ["EMPLOYEE"],
-    digitManagedRoleAllowlist: ["EMPLOYEE", "GRO", "PGR_VIEWER"],
+    digitManagedRoleAllowlist: [
+      "EMPLOYEE", "GRO", "PGR_VIEWER", "ACCOUNT_ADMIN", "MDMS_ADMIN", "LOC_ADMIN", "SUPERUSER",
+    ],
     digitRoleClientId: "digit-ui",
     pgrOnboardingWorkerUrl: pgrBase,
     pgrOnboardingWorkerToken: "worker-secret",
     onboardingTenantAdminGroup: "tenant-admins",
-    onboardingTenantAdminRoles: ["TENANT_ADMIN", "GRO"],
+    onboardingTenantAdminRoles: [
+      "TENANT_ADMIN", "GRO", "ACCOUNT_ADMIN", "MDMS_ADMIN", "LOC_ADMIN", "SUPERUSER",
+    ],
   });
   resetDigitAdminToken();
   clearTenantCaches();
@@ -125,7 +129,10 @@ describe("onboarding worker", () => {
     expect(account.mobileNumber).toBe("712345678");
     expect(account.countryCode).toBe("+254");
     expect(account.roles.map((role) => `${role.tenantId}:${role.code}`).sort())
-      .toEqual(["riverside:EMPLOYEE", "riverside:GRO"]);
+      .toEqual([
+        "riverside:ACCOUNT_ADMIN", "riverside:EMPLOYEE", "riverside:GRO",
+        "riverside:LOC_ADMIN", "riverside:MDMS_ADMIN", "riverside:SUPERUSER",
+      ]);
     expect(digit.encKeys.has("riverside")).toBe(true);
     expect([...digit.schemas.get("riverside")!.keys()]).toEqual(["tenant.tenants"]);
     const tenantRecord = digit.mdms.get("riverside|tenant.tenants")?.[0]?.data;

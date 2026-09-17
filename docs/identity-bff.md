@@ -340,6 +340,13 @@ configuration are deferred to the management/configuration flow. The PGR signup
 record remains the onboarding metadata/saga snapshot until that flow materializes it.
 A PGR outage only logs a skipped worker cycle.
 
+The default tenant-admin bundle is `TENANT_ADMIN`, `GRO`, `ACCOUNT_ADMIN`,
+`MDMS_ADMIN`, `LOC_ADMIN`, and `SUPERUSER`. `TENANT_ADMIN` controls BFF
+Organization administration. The remaining allowlisted roles are projected to
+the tenant-local DIGIT account so the initial administrator can operate PGR and
+the existing configuration surfaces. Deployments may narrow the bundle only
+after their access-control actions have an equivalent tenant-admin role.
+
 ## Docker Compose deployment
 
 `deploy/digit-compose/` layers Keycloak 26.7.3 and the BFF onto a DIGIT

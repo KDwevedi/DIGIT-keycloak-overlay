@@ -290,7 +290,8 @@ kc get "clients/$management_uuid/roles" -r "$REALM" |
 
 role_uuid=$(client_uuid "$ROLE_CLIENT")
 for role in EMPLOYEE SUPERUSER GRO PGR_LME DGRO CSR SUPERVISOR \
-  AUTO_ESCALATE PGR_VIEWER TICKET_REPORT_VIEWER TENANT_ADMIN VIEWER; do
+  AUTO_ESCALATE PGR_VIEWER TICKET_REPORT_VIEWER TENANT_ADMIN VIEWER \
+  ACCOUNT_ADMIN MDMS_ADMIN LOC_ADMIN; do
   if ! kc get "clients/$role_uuid/roles/$role" -r "$REALM" >/dev/null 2>&1; then
     kc create "clients/$role_uuid/roles" -r "$REALM" -s "name=$role" >/dev/null
   fi

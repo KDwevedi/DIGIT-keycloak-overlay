@@ -74,7 +74,10 @@ function getOrCreateRealm(name: string): RealmState {
         ["digit-ui", {
           id: "digit-ui-uuid",
           clientId: "digit-ui",
-          roles: ["TENANT_ADMIN", "VIEWER", "GRO", "PGR_VIEWER"].map((role) => ({
+          roles: [
+            "TENANT_ADMIN", "VIEWER", "GRO", "PGR_VIEWER",
+            "ACCOUNT_ADMIN", "MDMS_ADMIN", "LOC_ADMIN", "SUPERUSER",
+          ].map((role) => ({
             id: `${role.toLowerCase()}-id`,
             name: role,
           })),

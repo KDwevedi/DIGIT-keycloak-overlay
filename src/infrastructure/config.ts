@@ -162,7 +162,8 @@ export const config = {
   onboardingTenantAdminGroup:
     process.env.ONBOARDING_TENANT_ADMIN_GROUP || "tenant-admins",
   onboardingTenantAdminRoles: csv(
-    process.env.ONBOARDING_TENANT_ADMIN_ROLES || "TENANT_ADMIN,GRO",
+    process.env.ONBOARDING_TENANT_ADMIN_ROLES ||
+      "TENANT_ADMIN,GRO,ACCOUNT_ADMIN,MDMS_ADMIN,LOC_ADMIN,SUPERUSER",
   ),
   identityOrganizationAdminRoles: csv(
     process.env.IDENTITY_ORGANIZATION_ADMIN_ROLES || "TENANT_ADMIN",
@@ -172,7 +173,7 @@ export const config = {
   digitManagedBaseRoles: csv(process.env.DIGIT_MANAGED_BASE_ROLES || "EMPLOYEE"),
   digitManagedRoleAllowlist: csv(
     process.env.DIGIT_MANAGED_ROLE_ALLOWLIST ||
-      "EMPLOYEE,GRO,PGR_LME,DGRO,CSR,SUPERVISOR,AUTO_ESCALATE,PGR_VIEWER,TICKET_REPORT_VIEWER",
+      "EMPLOYEE,GRO,PGR_LME,DGRO,CSR,SUPERVISOR,AUTO_ESCALATE,PGR_VIEWER,TICKET_REPORT_VIEWER,ACCOUNT_ADMIN,MDMS_ADMIN,LOC_ADMIN,SUPERUSER",
   ),
   digitRoleClientId:
     process.env.DIGIT_ROLE_CLIENT_ID || process.env.DIGIT_IDENTITY_CLIENT_ID || "digit-ui",
