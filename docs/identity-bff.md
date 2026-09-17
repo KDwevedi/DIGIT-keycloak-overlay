@@ -34,6 +34,83 @@ password.
 | `POST` | `/identity/v1/contexts/_select` | Records the tenant and returns the normal DIGIT login response |
 | `POST` | `/identity/v1/logout` | Revokes the DIGIT token and Keycloak session, clears the cookie |
 
+### Existing-user sign-in sequence
+
+Prerequisite: the person already exists in Keycloak. To receive a tenant
+option, they must also be a member of a mapped Keycloak Organization with an
+active BFF-managed DIGIT account for that tenant.
+
+```text
+Browser          Identity BFF              Keycloak             egov-user
+   | GET /authorize   |                         |                     |
+   |----------------->| 302 OIDC authorization |                     |
+   |<-----------------|------------------------>| login               |
+   |                  | GET /callback?code&state|                     |
+   |                  |<------------------------|                     |
+   |                  | exchange and verify code                      |
+   |                  | create server-side session                    |
+   | 303 FE + HttpOnly session cookie          |                     |
+   |<-----------------|                         |                     |
+   | GET /session     |                         |                     |
+   | GET /tenants     | live membership lookup |                     |
+   | POST /contexts/_select                     | reconcile + login   |
+   |----------------->|---------------------------------------------->|
+   | user-scoped DIGIT access_token             |                     |
+   |<-----------------|                         |                     |
+```
+
+Frontend calls:
+
+1. Navigate the browser, rather than making an AJAX request, to:
+
+   ```http
+   GET /identity/v1/authorize?method=password
+   ```
+
+   `magic_link`, `google`, and `github` use the same endpoint when advertised
+   by `GET /identity/v1/auth-methods`.
+
+2. Keycloak returns to `GET /identity/v1/callback?code=...&state=...`. The BFF
+   consumes the code, stores Keycloak tokens server-side, sets the opaque
+   HttpOnly session cookie, and redirects with `303` to the configured frontend.
+   The frontend must not implement or call the callback itself.
+
+3. After the redirect, load the authenticated state and eligible tenants. For
+   cross-origin development, use `credentials: "include"` on both requests:
+
+   ```http
+   GET /identity/v1/session
+   GET /identity/v1/tenants
+   ```
+
+   ```json
+   {
+     "tenants": [
+       { "tenantId": "bomet", "name": "Bomet County Government", "organizationAlias": "bomet", "roles": ["GRO"] }
+     ],
+     "selectionRequired": false,
+     "onboardingRequired": false
+   }
+   ```
+
+4. Select one returned `tenantId` using the same cookie:
+
+   ```http
+   POST /identity/v1/contexts/_select
+   Content-Type: application/json
+
+   { "tenantId": "bomet" }
+   ```
+
+5. Store the returned `access_token` in the frontend's existing DIGIT auth
+   state. Continue sending it as `RequestInfo.authToken` to normal DIGIT APIs.
+   It is a tenant-specific DIGIT token; it is not the BFF cookie or a Keycloak
+   token.
+
+`401` means the opaque session is absent or expired, `403` means the requested
+tenant is no longer available to that user, and `503` means a required identity
+dependency is temporarily unavailable.
+
 Password, magic link, Google, and GitHub all enter the same Keycloak browser
 flow (brokered methods use `kc_idp_hint`) and converge on one callback. Keycloak
 tokens stay in Redis behind a random HttpOnly cookie. `SameSite=Lax` is the
